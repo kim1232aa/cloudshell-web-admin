@@ -53,7 +53,7 @@ STATUS_FILE="$STATE_DIR/status"
 LAST_TICKLE="$STATE_DIR/last-tickle"
 
 ts()  { date -u '+%F %T'; }
-log() { echo "$(ts) $*" >&2; }   # stderr: keeps stdout clean for captured values
+log() { echo "$(ts) $*" | tee -a "$STATE_DIR/watchdog.log" >&2; }   # stderr + file for web-admin's log tail
 
 is_dead_code() { case "$1" in 000|502|503|530) return 0 ;; *) return 1 ;; esac; }
 
@@ -76,11 +76,21 @@ probe() {
 
 list_configs() { gcloud config configurations list --format='value(name)' 2>/dev/null; }
 
-account_ok() { CLOUDSDK_ACTIVE_CONFIG_NAME="$1" gcloud auth print-access-token >/dev/null 2>&1; }
+account_proxy_env() { # $1=config name; prints "https_proxy=<url> http_proxy=<url>" or empty
+  local f="$STATE_DIR/proxy-$1" p
+  [ -f "$f" ] || return 0
+  p=$(cat "$f")
+  [ -n "$p" ] && printf 'https_proxy=%s http_proxy=%s' "$p" "$p"
+}
+
+account_ok() {
+  env $(account_proxy_env "$1") CLOUDSDK_ACTIVE_CONFIG_NAME="$1" \
+    gcloud auth print-access-token >/dev/null 2>&1
+}
 
 rebuild_on() { # $1=config; stdout=vless link; rc: 0 ok, 1 fail (any reason)
   local out rc link
-  out=$(CLOUDSDK_ACTIVE_CONFIG_NAME="$1" timeout 240 gcloud cloud-shell ssh \
+  out=$(env $(account_proxy_env "$1") CLOUDSDK_ACTIVE_CONFIG_NAME="$1" timeout 240 gcloud cloud-shell ssh \
         --ssh-flag="-o BatchMode=yes" --quiet \
         --command="bash ~/proxy-start.sh >/dev/null 2>&1; head -1 ~/proxy-link.txt 2>/dev/null" 2>&1)
   rc=$?
@@ -133,7 +143,7 @@ tickle() { # keepalive: short ssh session on the current account
   [ -f "$LAST_TICKLE" ] && last=$(cat "$LAST_TICKLE")
   now=$(date -u +%s)
   [ $(( now - last )) -lt "$KEEPALIVE_INTERVAL" ] && return 0
-  if CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" timeout 60 gcloud cloud-shell ssh \
+  if env $(account_proxy_env "$cfg") CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" timeout 60 gcloud cloud-shell ssh \
       --ssh-flag="-o BatchMode=yes" --quiet --command=true >/dev/null 2>&1; then
     date -u +%s > "$LAST_TICKLE"
     log "keepalive tickle ok ($cfg)"
@@ -162,7 +172,22 @@ if [ "$FORCE" = "1" ]; then
   exit $?
 fi
 
+FORCE_FLAG="$STATE_DIR/force-failover-requested"
 check_once
+LAST_CHECK=$(date -u +%s)
 if [ "$LOOP" = "1" ]; then
-  while sleep "$INTERVAL"; do check_once; done
+  while sleep 10; do
+    if [ -f "$FORCE_FLAG" ]; then
+      rm -f "$FORCE_FLAG"
+      log "force-failover flag seen — triggering immediately"
+      failover
+      LAST_CHECK=$(date -u +%s)
+      continue
+    fi
+    NOW=$(date -u +%s)
+    if [ $(( NOW - ${LAST_CHECK:-0} )) -ge "$INTERVAL" ]; then
+      check_once
+      LAST_CHECK=$NOW
+    fi
+  done
 fi
