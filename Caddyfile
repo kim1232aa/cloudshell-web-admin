@@ -1,0 +1,3 @@
+{$ADMIN_DOMAIN} {
+	reverse_proxy web-admin:8080
+}

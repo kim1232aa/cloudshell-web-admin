@@ -228,6 +228,24 @@ probe — and in docker also gcloud itself — via a local proxy, e.g.
 - **ssh key**: container-generated, persisted in `/state/ssh`; gcloud re-uploads the
   public key on every connect, so a fresh container needs zero manual setup.
 
+## 4. Web admin panel (recommended over the CLI `auth` flow)
+
+```bash
+python3 web_admin/hash_password.py                  # prints ADMIN_PASSWORD_HASH
+python3 -c "import secrets; print(secrets.token_hex(32))"   # SESSION_SECRET
+cp .env.example .env   # fill in TUNNEL_HOST, ADMIN_DOMAIN, ADMIN_PASSWORD_HASH, SESSION_SECRET
+docker compose up -d --build
+```
+
+Open `https://$ADMIN_DOMAIN/` (Caddy provisions the certificate automatically —
+`ADMIN_DOMAIN` must already point at this VPS). From there: add/remove Google
+accounts (web-based `gcloud auth login`, no terminal needed), maintain a pool of
+proxies and bind one to each account (every gcloud call for that account —
+login, Cloud Shell rebuild, keepalive — then goes through it instead of this
+VPS's bare IP), watch the current proxy link/QR/logs, and trigger an immediate
+failover. The CLI flow (`docker compose run --rm watchdog auth <name>`) still
+works as a fallback.
+
 ## Hard limits (read before relying on this)
 
 - 50 h/week/account usage quota; sessions capped at 12 h; non-interactive sessions are
