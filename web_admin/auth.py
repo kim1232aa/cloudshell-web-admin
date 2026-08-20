@@ -14,14 +14,18 @@ SESSION_TTL_SECONDS = 12 * 60 * 60
 
 
 def hash_password(password: str) -> str:
+    # ":" separator, not "$": this value normally lives in a compose .env
+    # file, and docker compose treats a bare "$word" in .env values as a
+    # variable reference to interpolate — a "$"-separated hash would get
+    # silently corrupted (unset-variable fragments replaced with "").
     salt = os.urandom(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS)
-    return f"{PBKDF2_ITERATIONS}${base64.b64encode(salt).decode()}${base64.b64encode(digest).decode()}"
+    return f"{PBKDF2_ITERATIONS}:{base64.b64encode(salt).decode()}:{base64.b64encode(digest).decode()}"
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
     try:
-        iterations_s, salt_b64, digest_b64 = stored_hash.split("$")
+        iterations_s, salt_b64, digest_b64 = stored_hash.split(":")
         iterations = int(iterations_s)
         salt = base64.b64decode(salt_b64)
         expected = base64.b64decode(digest_b64)
