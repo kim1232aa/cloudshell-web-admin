@@ -1,0 +1,61 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cloudshell-web-admin</title>
+<link rel="stylesheet" href="/static/style.css">
+<body>
+  <header>
+    <h1>Cloud Shell 管理面板</h1>
+    <button id="logout-btn">登出</button>
+  </header>
+
+  <section id="status-section">
+    <h2>当前状态</h2>
+    <p>Proxy 链接：<code id="proxy-link">-</code></p>
+    <div id="qr-code"></div>
+    <button id="force-failover-btn">强制 Failover</button>
+  </section>
+
+  <section id="accounts-section">
+    <h2>Google 账号</h2>
+    <table id="accounts-table">
+      <thead><tr><th>名称</th><th>邮箱</th><th>状态</th><th>代理</th><th>当前</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <button id="add-account-btn">添加账号</button>
+  </section>
+
+  <section id="proxies-section">
+    <h2>代理池</h2>
+    <table id="proxies-table">
+      <thead><tr><th>标签</th><th>URL</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <form id="add-proxy-form">
+      <input id="proxy-label" placeholder="标签，如 HK-1">
+      <input id="proxy-url" placeholder="socks5://user:pass@host:port">
+      <button type="submit">添加代理</button>
+    </form>
+  </section>
+
+  <section id="logs-section">
+    <h2>日志</h2>
+    <pre id="log-tail"></pre>
+  </section>
+
+  <dialog id="add-account-dialog">
+    <form id="add-account-form">
+      <label>账号名 <input id="new-account-name" pattern="[a-zA-Z0-9_-]{1,50}" required></label>
+      <label>代理 <select id="new-account-proxy"><option value="">直连</option></select></label>
+      <button type="submit">开始登录</button>
+      <button type="button" id="cancel-add-account">取消</button>
+    </form>
+    <pre id="login-output"></pre>
+    <form id="login-code-form" style="display:none">
+      <input id="login-code" placeholder="粘贴验证码">
+      <button type="submit">提交</button>
+    </form>
+  </dialog>
+
+  <script src="/static/qrcode.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>

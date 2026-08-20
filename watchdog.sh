@@ -53,7 +53,7 @@ STATUS_FILE="$STATE_DIR/status"
 LAST_TICKLE="$STATE_DIR/last-tickle"
 
 ts()  { date -u '+%F %T'; }
-log() { echo "$(ts) $*" >&2; }   # stderr: keeps stdout clean for captured values
+log() { echo "$(ts) $*" | tee -a "$STATE_DIR/watchdog.log" >&2; }   # stderr + file for web-admin's log tail
 
 is_dead_code() { case "$1" in 000|502|503|530) return 0 ;; *) return 1 ;; esac; }
 
@@ -76,11 +76,21 @@ probe() {
 
 list_configs() { gcloud config configurations list --format='value(name)' 2>/dev/null; }
 
-account_ok() { CLOUDSDK_ACTIVE_CONFIG_NAME="$1" gcloud auth print-access-token >/dev/null 2>&1; }
+account_proxy_env() { # $1=config name; prints "https_proxy=<url> http_proxy=<url>" or empty
+  local f="$STATE_DIR/proxy-$1" p
+  [ -f "$f" ] || return 0
+  p=$(cat "$f")
+  [ -n "$p" ] && printf 'https_proxy=%s http_proxy=%s' "$p" "$p"
+}
+
+account_ok() {
+  env $(account_proxy_env "$1") CLOUDSDK_ACTIVE_CONFIG_NAME="$1" \
+    gcloud auth print-access-token >/dev/null 2>&1
+}
 
 rebuild_on() { # $1=config; stdout=vless link; rc: 0 ok, 1 fail (any reason)
   local out rc link
-  out=$(CLOUDSDK_ACTIVE_CONFIG_NAME="$1" timeout 240 gcloud cloud-shell ssh \
+  out=$(env $(account_proxy_env "$1") CLOUDSDK_ACTIVE_CONFIG_NAME="$1" timeout 240 gcloud cloud-shell ssh \
         --ssh-flag="-o BatchMode=yes" --quiet \
         --command="bash ~/proxy-start.sh >/dev/null 2>&1; head -1 ~/proxy-link.txt 2>/dev/null" 2>&1)
   rc=$?
@@ -94,14 +104,19 @@ rebuild_on() { # $1=config; stdout=vless link; rc: 0 ok, 1 fail (any reason)
 }
 
 failover() {
-  local cfgs=() cur=-1 k i cfg link order=()
+  local cfgs=() cur=0 k i cfg link order=() cur_name=""
   mapfile -t cfgs < <(list_configs)
   [ "${#cfgs[@]}" -eq 0 ] && { log "no gcloud configurations found — run the auth helper first"; return 1; }
-  # sticky order: try the current account first, then rotate through the rest
-  cur=-1
-  [ -f "$CUR_FILE" ] && cur=$(cat "$CUR_FILE")
-  case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
-  [ "$cur" -ge "${#cfgs[@]}" ] && cur=0
+  # sticky order: try the last-known-current account first — matched by
+  # *name*, not array position, so a deleted/reordered account ahead of it
+  # can't silently shift which config this index now points at — then
+  # rotate through the rest.
+  if [ -f "$CUR_FILE" ]; then
+    cur_name=$(cat "$CUR_FILE")
+    for ((k = 0; k < ${#cfgs[@]}; k++)); do
+      [ "${cfgs[$k]}" = "$cur_name" ] && { cur=$k; break; }
+    done
+  fi
   order+=("$cur")
   for ((k = 1; k < ${#cfgs[@]}; k++)); do order+=( $(( (cur + k) % ${#cfgs[@]} )) ); done
   for i in "${order[@]}"; do
@@ -109,7 +124,7 @@ failover() {
     account_ok "$cfg" || { log "$cfg: skip (auth invalid — run: docker compose run --rm watchdog auth $cfg)"; continue; }
     log "$cfg: triggering Cloud Shell rebuild..."
     if link=$(rebuild_on "$cfg"); then
-      echo "$i" > "$CUR_FILE"
+      echo "$cfg" > "$CUR_FILE"
       echo "$link" > "$LINK_FILE"
       date -u +%s > "$LAST_TICKLE"
       log "$cfg: UP -> $link"
@@ -125,15 +140,16 @@ failover() {
 tickle() { # keepalive: short ssh session on the current account
   [ "$KEEPALIVE" = "1" ] || return 0
   [ -f "$CUR_FILE" ] || return 0
-  local cfgs=() cfg last=0 now
-  mapfile -t cfgs < <(list_configs)
-  [ "${#cfgs[@]}" -eq 0 ] && return 0
-  cfg="${cfgs[$(cat "$CUR_FILE")]:-}"
+  local cfgs=() cfg last=0 now found=0 c
+  cfg=$(cat "$CUR_FILE")
   [ -z "$cfg" ] && return 0
+  mapfile -t cfgs < <(list_configs)
+  for c in "${cfgs[@]}"; do [ "$c" = "$cfg" ] && { found=1; break; }; done
+  [ "$found" = "1" ] || return 0
   [ -f "$LAST_TICKLE" ] && last=$(cat "$LAST_TICKLE")
   now=$(date -u +%s)
   [ $(( now - last )) -lt "$KEEPALIVE_INTERVAL" ] && return 0
-  if CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" timeout 60 gcloud cloud-shell ssh \
+  if env $(account_proxy_env "$cfg") CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" timeout 60 gcloud cloud-shell ssh \
       --ssh-flag="-o BatchMode=yes" --quiet --command=true >/dev/null 2>&1; then
     date -u +%s > "$LAST_TICKLE"
     log "keepalive tickle ok ($cfg)"
@@ -162,7 +178,22 @@ if [ "$FORCE" = "1" ]; then
   exit $?
 fi
 
+FORCE_FLAG="$STATE_DIR/force-failover-requested"
 check_once
+LAST_CHECK=$(date -u +%s)
 if [ "$LOOP" = "1" ]; then
-  while sleep "$INTERVAL"; do check_once; done
+  while sleep 10; do
+    if [ -f "$FORCE_FLAG" ]; then
+      rm -f "$FORCE_FLAG"
+      log "force-failover flag seen — triggering immediately"
+      failover
+      LAST_CHECK=$(date -u +%s)
+      continue
+    fi
+    NOW=$(date -u +%s)
+    if [ $(( NOW - ${LAST_CHECK:-0} )) -ge "$INTERVAL" ]; then
+      check_once
+      LAST_CHECK=$NOW
+    fi
+  done
 fi

@@ -18,8 +18,42 @@ services:
     volumes:
       - ./state:/state
 
+  web-admin:
+    build:
+      context: .
+      dockerfile: web_admin/Dockerfile
+    container_name: cloudshell-web-admin
+    restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD_HASH: "${ADMIN_PASSWORD_HASH:?run python3 web_admin/hash_password.py first}"
+      SESSION_SECRET: ${SESSION_SECRET:?set a random SESSION_SECRET in .env}
+      PORT: 8080
+    volumes:
+      - ./state:/state
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: cloudshell-web-admin-caddy
+    restart: unless-stopped
+    depends_on:
+      - web-admin
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:?set ADMIN_DOMAIN in .env, e.g. admin.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:
+
 # Add a Google account (one per config, you do the browser part):
 #   docker compose run --rm watchdog auth acct-a
 #   docker compose run --rm watchdog auth acct-b
+# Or use the web panel at https://$ADMIN_DOMAIN/ instead (recommended).
 # Force an immediate failover (ops/testing):
 #   docker compose run --rm watchdog --force

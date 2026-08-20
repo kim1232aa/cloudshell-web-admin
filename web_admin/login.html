@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cloudshell-web-admin 登录</title>
+<link rel="stylesheet" href="/static/style.css">
+<div class="login-box">
+  <h1>登录</h1>
+  <form id="login-form">
+    <input type="password" id="password" placeholder="密码" autofocus>
+    <button type="submit">登录</button>
+  </form>
+  <p id="login-error" class="error"></p>
+</div>
+<script>
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const password = document.getElementById('password').value;
+  const resp = await fetch('/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'cloudshell-web-admin'},
+    body: JSON.stringify({password}),
+  });
+  if (resp.ok) {
+    window.location.href = '/';
+  } else {
+    const data = await resp.json();
+    document.getElementById('login-error').textContent = data.error || '登录失败';
+  }
+});
+</script>
