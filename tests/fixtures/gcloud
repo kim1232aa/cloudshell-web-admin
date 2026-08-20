@@ -1,0 +1,42 @@
+#!/bin/bash
+# tests/fixtures/gcloud — stand-in for the real `gcloud` CLI in tests.
+# Named literally "gcloud" (not "fake_gcloud") so that prepending this
+# directory to PATH actually shadows the real binary during subprocess lookup.
+# Behavior is driven by argv/env only; no network, no real credentials.
+set -u
+
+if [ "$1" = "config" ] && [ "$2" = "configurations" ]; then
+  case "$3" in
+    list) echo "acct-a"; echo "acct-b"; exit 0 ;;
+    describe) exit 0 ;;
+    create) exit 0 ;;
+    delete) exit 0 ;;
+  esac
+fi
+
+if [ "$1" = "auth" ] && [ "$2" = "print-access-token" ]; then
+  [ "${CLOUDSDK_ACTIVE_CONFIG_NAME:-}" = "acct-broken" ] && exit 1
+  echo "fake-token"
+  exit 0
+fi
+
+if [ "$1" = "auth" ] && [ "$2" = "list" ]; then
+  echo "fake-${CLOUDSDK_ACTIVE_CONFIG_NAME:-unknown}@example.com"
+  exit 0
+fi
+
+if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
+  echo "Go to the following link in your browser:"
+  echo "    https://accounts.google.com/o/oauth2/auth?fake=1"
+  echo
+  echo -n "Enter authorization code: "
+  read -r code
+  if [ "$code" = "GOODCODE" ]; then
+    echo "You are now logged in."
+    exit 0
+  fi
+  echo "Invalid code." >&2
+  exit 1
+fi
+
+exit 0
