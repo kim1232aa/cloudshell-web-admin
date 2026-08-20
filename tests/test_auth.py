@@ -53,5 +53,39 @@ class TestSessionCookie(unittest.TestCase):
         self.assertFalse(auth.verify_session_cookie(self.secret, "not-even-a-cookie"))
 
 
+class TestLoginRateLimiter(unittest.TestCase):
+    def test_locks_after_max_attempts(self):
+        limiter = auth.LoginRateLimiter(max_attempts=3, window_seconds=60)
+        now = 1000.0
+        for _ in range(3):
+            limiter.record_failure("1.2.3.4", now=now)
+        self.assertTrue(limiter.is_locked("1.2.3.4", now=now))
+
+    def test_not_locked_before_max_attempts(self):
+        limiter = auth.LoginRateLimiter(max_attempts=3, window_seconds=60)
+        now = 1000.0
+        limiter.record_failure("1.2.3.4", now=now)
+        limiter.record_failure("1.2.3.4", now=now)
+        self.assertFalse(limiter.is_locked("1.2.3.4", now=now))
+
+    def test_window_expires_old_attempts(self):
+        limiter = auth.LoginRateLimiter(max_attempts=3, window_seconds=60)
+        for _ in range(3):
+            limiter.record_failure("1.2.3.4", now=1000.0)
+        self.assertFalse(limiter.is_locked("1.2.3.4", now=1000.0 + 61))
+
+    def test_success_clears_attempts(self):
+        limiter = auth.LoginRateLimiter(max_attempts=3, window_seconds=60)
+        for _ in range(3):
+            limiter.record_failure("1.2.3.4", now=1000.0)
+        limiter.record_success("1.2.3.4")
+        self.assertFalse(limiter.is_locked("1.2.3.4", now=1000.0))
+
+    def test_ips_are_independent(self):
+        limiter = auth.LoginRateLimiter(max_attempts=1, window_seconds=60)
+        limiter.record_failure("1.1.1.1", now=1000.0)
+        self.assertFalse(limiter.is_locked("2.2.2.2", now=1000.0))
+
+
 if __name__ == "__main__":
     unittest.main()

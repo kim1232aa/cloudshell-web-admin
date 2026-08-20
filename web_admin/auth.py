@@ -52,3 +52,25 @@ def verify_session_cookie(secret: str, cookie_value: str, now: float | None = No
     except ValueError:
         return False
     return 0 <= (now - issued_at) < SESSION_TTL_SECONDS
+
+
+class LoginRateLimiter:
+    """Tracks failed login attempts per source IP, in-memory only."""
+
+    def __init__(self, max_attempts: int = 5, window_seconds: int = 300):
+        self.max_attempts = max_attempts
+        self.window_seconds = window_seconds
+        self._attempts: dict[str, list[float]] = {}
+
+    def is_locked(self, ip: str, now: float | None = None) -> bool:
+        now = now if now is not None else time.time()
+        attempts = [t for t in self._attempts.get(ip, []) if now - t < self.window_seconds]
+        self._attempts[ip] = attempts
+        return len(attempts) >= self.max_attempts
+
+    def record_failure(self, ip: str, now: float | None = None) -> None:
+        now = now if now is not None else time.time()
+        self._attempts.setdefault(ip, []).append(now)
+
+    def record_success(self, ip: str) -> None:
+        self._attempts.pop(ip, None)
