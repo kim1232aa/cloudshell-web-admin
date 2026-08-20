@@ -18,6 +18,7 @@ import re
 
 import gcloud_accounts
 import proxy_pool
+import state_paths
 
 APP_DIR = Path(__file__).resolve().parent
 ADMIN_PASSWORD_HASH = os.environ["ADMIN_PASSWORD_HASH"]
@@ -141,6 +142,21 @@ class Handler(BaseHTTPRequestHandler):
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "no login in progress"})
             return
+        if path == "/api/proxies":
+            if not self._require_session():
+                return
+            self._send_json(HTTPStatus.OK, {"proxies": proxy_pool.list_proxies()})
+            return
+        if path == "/api/status":
+            if not self._require_session():
+                return
+            self._send_json(HTTPStatus.OK, self._status_payload())
+            return
+        if path == "/api/logs":
+            if not self._require_session():
+                return
+            self._send_json(HTTPStatus.OK, {"lines": self._tail_log(200)})
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self) -> None:
@@ -178,6 +194,23 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(HTTPStatus.OK, {"ok": True})
             return
+        if path == "/api/proxies":
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            body = _read_json_body(self)
+            try:
+                entry = proxy_pool.add_proxy(body.get("label", ""), body.get("url", ""))
+            except ValueError as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, entry)
+            return
+        if path == "/api/force-failover":
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            Path(state_paths.force_failover_flag()).touch()
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_DELETE(self) -> None:
@@ -189,7 +222,26 @@ class Handler(BaseHTTPRequestHandler):
             gcloud_accounts.delete_account(m.group(1))
             self._send_json(HTTPStatus.OK, {"ok": True})
             return
+        m = re.match(r"^/api/proxies/([a-zA-Z0-9]{1,32})$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            proxy_pool.delete_proxy(m.group(1))
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def _status_payload(self) -> dict:
+        link_path = Path(state_paths.proxy_link_file())
+        link = link_path.read_text().splitlines()[0] if link_path.exists() else None
+        idx = gcloud_accounts.current_account_index()
+        return {"proxy_link": link, "current_account_index": idx}
+
+    def _tail_log(self, n: int) -> list[str]:
+        log_path = Path(state_paths.watchdog_log_file())
+        if not log_path.exists():
+            return []
+        return log_path.read_text().splitlines()[-n:]
 
     def _handle_login(self) -> None:
         ip = self._client_ip()
