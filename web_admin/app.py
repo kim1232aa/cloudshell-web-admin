@@ -14,6 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import auth  # noqa: E402
+import re
+
+import gcloud_accounts
+import proxy_pool
 
 APP_DIR = Path(__file__).resolve().parent
 ADMIN_PASSWORD_HASH = os.environ["ADMIN_PASSWORD_HASH"]
@@ -118,6 +122,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_html(HTTPStatus.OK, (APP_DIR / "index.html").read_text())
             return
+        if path == "/api/accounts":
+            if not self._require_session():
+                return
+            proxies_by_url = {p["url"]: p for p in proxy_pool.list_proxies()}
+            accounts = gcloud_accounts.list_accounts()
+            for a in accounts:
+                p = proxies_by_url.get(a["proxy_url"])
+                a["proxy_label"] = p["label"] if p else a["proxy_url"]
+            self._send_json(HTTPStatus.OK, {"accounts": accounts})
+            return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/output$", path)
+        if m:
+            if not self._require_session():
+                return
+            try:
+                self._send_json(HTTPStatus.OK, gcloud_accounts.login_output(m.group(1)))
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "no login in progress"})
+            return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
     def do_POST(self) -> None:
@@ -127,6 +150,44 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/logout":
             self._handle_logout()
+            return
+        if path == "/api/accounts":
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            body = _read_json_body(self)
+            proxy_url = None
+            proxy_id = body.get("proxy_id")
+            if proxy_id:
+                proxy_url = proxy_pool.get_proxy_url(proxy_id)
+            try:
+                gcloud_accounts.start_login(body.get("name", ""), proxy_url)
+            except gcloud_accounts.InvalidAccountName as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/input$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            body = _read_json_body(self)
+            try:
+                gcloud_accounts.send_login_input(m.group(1), body.get("text", ""))
+            except KeyError:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "no login in progress"})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_DELETE(self) -> None:
+        path = self.path.split("?", 1)[0]
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            gcloud_accounts.delete_account(m.group(1))
+            self._send_json(HTTPStatus.OK, {"ok": True})
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
