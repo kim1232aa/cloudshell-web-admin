@@ -63,19 +63,35 @@ class TestWithFakeGcloud(unittest.TestCase):
         gcloud_accounts.write_account_proxy_url("acct-a", None)
         self.assertIsNone(gcloud_accounts.read_account_proxy_url("acct-a"))
 
-    def test_current_account_index_absent(self):
-        self.assertIsNone(gcloud_accounts.current_account_index())
+    def test_current_account_name_absent(self):
+        self.assertIsNone(gcloud_accounts.current_account_name())
 
-    def test_current_account_index_present(self):
+    def test_current_account_name_present(self):
         with open(os.path.join(self.tmpdir, "current-account"), "w") as f:
-            f.write("1")
-        self.assertEqual(gcloud_accounts.current_account_index(), 1)
+            f.write("acct-b")
+        self.assertEqual(gcloud_accounts.current_account_name(), "acct-b")
 
     def test_list_accounts_shape(self):
         accounts = gcloud_accounts.list_accounts()
         self.assertEqual([a["name"] for a in accounts], ["acct-a", "acct-b"])
         self.assertEqual(accounts[0]["status"], "ok")
         self.assertEqual(accounts[0]["email"], "fake-acct-a@example.com")
+
+    def test_is_current_survives_account_list_shrinking(self):
+        # regression test: current-account must be matched by name, not by
+        # position — otherwise deleting an earlier account in the list
+        # silently reassigns "current" to whatever now sits at that index.
+        with open(os.path.join(self.tmpdir, "current-account"), "w") as f:
+            f.write("acct-b")
+        accounts = gcloud_accounts.list_accounts()
+        current = [a["name"] for a in accounts if a["is_current"]]
+        self.assertEqual(current, ["acct-b"])
+
+    def test_is_current_false_for_all_when_current_account_deleted(self):
+        with open(os.path.join(self.tmpdir, "current-account"), "w") as f:
+            f.write("acct-deleted")
+        accounts = gcloud_accounts.list_accounts()
+        self.assertFalse(any(a["is_current"] for a in accounts))
 
 
 class TestLoginSession(unittest.TestCase):

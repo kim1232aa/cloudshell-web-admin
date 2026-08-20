@@ -234,8 +234,8 @@ class Handler(BaseHTTPRequestHandler):
     def _status_payload(self) -> dict:
         link_path = Path(state_paths.proxy_link_file())
         link = link_path.read_text().splitlines()[0] if link_path.exists() else None
-        idx = gcloud_accounts.current_account_index()
-        return {"proxy_link": link, "current_account_index": idx}
+        name = gcloud_accounts.current_account_name()
+        return {"proxy_link": link, "current_account_name": name}
 
     def _tail_log(self, n: int) -> list[str]:
         log_path = Path(state_paths.watchdog_log_file())

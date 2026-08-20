@@ -65,14 +65,15 @@ def account_email(name: str) -> str | None:
     return lines[0] if lines else None
 
 
-def current_account_index() -> int | None:
+def current_account_name() -> str | None:
+    # watchdog.sh writes the account *name* here (not an array index — a
+    # position would silently point at the wrong account after the list
+    # shrinks, e.g. when an earlier account gets deleted).
     path = Path(state_paths.current_account_file())
     if not path.exists():
         return None
-    try:
-        return int(path.read_text().strip())
-    except ValueError:
-        return None
+    content = path.read_text().strip()
+    return content or None
 
 
 def read_account_proxy_url(name: str) -> str | None:
@@ -93,15 +94,15 @@ def write_account_proxy_url(name: str, proxy_url: str | None) -> None:
 
 def list_accounts() -> list[dict]:
     names = list_account_names()
-    current_idx = current_account_index()
+    current_name = current_account_name()
     accounts = []
-    for i, name in enumerate(names):
+    for name in names:
         accounts.append({
             "name": name,
             "email": account_email(name),
             "status": account_status(name),
             "proxy_url": read_account_proxy_url(name),
-            "is_current": current_idx == i,
+            "is_current": name == current_name,
         })
     return accounts
 

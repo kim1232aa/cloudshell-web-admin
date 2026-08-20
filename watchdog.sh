@@ -104,14 +104,19 @@ rebuild_on() { # $1=config; stdout=vless link; rc: 0 ok, 1 fail (any reason)
 }
 
 failover() {
-  local cfgs=() cur=-1 k i cfg link order=()
+  local cfgs=() cur=0 k i cfg link order=() cur_name=""
   mapfile -t cfgs < <(list_configs)
   [ "${#cfgs[@]}" -eq 0 ] && { log "no gcloud configurations found — run the auth helper first"; return 1; }
-  # sticky order: try the current account first, then rotate through the rest
-  cur=-1
-  [ -f "$CUR_FILE" ] && cur=$(cat "$CUR_FILE")
-  case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
-  [ "$cur" -ge "${#cfgs[@]}" ] && cur=0
+  # sticky order: try the last-known-current account first — matched by
+  # *name*, not array position, so a deleted/reordered account ahead of it
+  # can't silently shift which config this index now points at — then
+  # rotate through the rest.
+  if [ -f "$CUR_FILE" ]; then
+    cur_name=$(cat "$CUR_FILE")
+    for ((k = 0; k < ${#cfgs[@]}; k++)); do
+      [ "${cfgs[$k]}" = "$cur_name" ] && { cur=$k; break; }
+    done
+  fi
   order+=("$cur")
   for ((k = 1; k < ${#cfgs[@]}; k++)); do order+=( $(( (cur + k) % ${#cfgs[@]} )) ); done
   for i in "${order[@]}"; do
@@ -119,7 +124,7 @@ failover() {
     account_ok "$cfg" || { log "$cfg: skip (auth invalid — run: docker compose run --rm watchdog auth $cfg)"; continue; }
     log "$cfg: triggering Cloud Shell rebuild..."
     if link=$(rebuild_on "$cfg"); then
-      echo "$i" > "$CUR_FILE"
+      echo "$cfg" > "$CUR_FILE"
       echo "$link" > "$LINK_FILE"
       date -u +%s > "$LAST_TICKLE"
       log "$cfg: UP -> $link"
@@ -135,11 +140,12 @@ failover() {
 tickle() { # keepalive: short ssh session on the current account
   [ "$KEEPALIVE" = "1" ] || return 0
   [ -f "$CUR_FILE" ] || return 0
-  local cfgs=() cfg last=0 now
-  mapfile -t cfgs < <(list_configs)
-  [ "${#cfgs[@]}" -eq 0 ] && return 0
-  cfg="${cfgs[$(cat "$CUR_FILE")]:-}"
+  local cfgs=() cfg last=0 now found=0 c
+  cfg=$(cat "$CUR_FILE")
   [ -z "$cfg" ] && return 0
+  mapfile -t cfgs < <(list_configs)
+  for c in "${cfgs[@]}"; do [ "$c" = "$cfg" ] && { found=1; break; }; done
+  [ "$found" = "1" ] || return 0
   [ -f "$LAST_TICKLE" ] && last=$(cat "$LAST_TICKLE")
   now=$(date -u +%s)
   [ $(( now - last )) -lt "$KEEPALIVE_INTERVAL" ] && return 0
