@@ -131,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
             for a in accounts:
                 p = proxies_by_url.get(a["proxy_url"])
                 a["proxy_label"] = p["label"] if p else a["proxy_url"]
+                a["proxy_id"] = p["id"] if p else None
             self._send_json(HTTPStatus.OK, {"accounts": accounts})
             return
         m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/output$", path)
@@ -227,6 +228,30 @@ class Handler(BaseHTTPRequestHandler):
             if not (self._require_session() and self._require_same_origin()):
                 return
             proxy_pool.delete_proxy(m.group(1))
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_PUT(self) -> None:
+        path = self.path.split("?", 1)[0]
+        # Rebind an *existing*, already-authenticated account to a different
+        # proxy (or back to direct) without touching its gcloud credentials —
+        # the only other way to set this is at account-creation time, which
+        # doesn't help accounts added via the old CLI flow.
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/proxy$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            name = m.group(1)
+            try:
+                gcloud_accounts.validate_name(name)
+            except gcloud_accounts.InvalidAccountName as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            body = _read_json_body(self)
+            proxy_id = body.get("proxy_id")
+            proxy_url = proxy_pool.get_proxy_url(proxy_id) if proxy_id else None
+            gcloud_accounts.write_account_proxy_url(name, proxy_url)
             self._send_json(HTTPStatus.OK, {"ok": True})
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
