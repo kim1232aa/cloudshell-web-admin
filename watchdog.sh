@@ -18,7 +18,14 @@
 #   TUNNEL_HOST may be given as env instead of the argument.
 #
 # Env knobs (all optional):
-#   INTERVAL=600             seconds between cycles in --loop mode
+#   INTERVAL=600             seconds between cycles in --loop mode, while healthy
+#   RETRY_BASE_INTERVAL=30   seconds before the first retry after a cycle ends
+#                            still down (all accounts failed); doubles each
+#                            consecutive failure, capped at INTERVAL — so a
+#                            transient outage (e.g. a network blip) gets
+#                            retried in seconds instead of waiting a full
+#                            INTERVAL, while a persistent one still backs off
+#                            to the normal cadence instead of hammering gcloud
 #   PROBE_PROXY=             e.g. http://172.17.0.1:7890 — route probe via local proxy
 #   KEEPALIVE=1              0 disables the keepalive tickle
 #   KEEPALIVE_INTERVAL=1500  seconds between tickles (must stay < 40 min)
@@ -41,6 +48,7 @@ done
 [ -z "$TUNNEL_HOST" ] && { echo "usage: watchdog.sh <tunnel-hostname> [--loop|--force]" >&2; exit 64; }
 
 INTERVAL="${INTERVAL:-600}"
+RETRY_BASE_INTERVAL="${RETRY_BASE_INTERVAL:-30}"
 PROBE_PROXY="${PROBE_PROXY:-}"
 KEEPALIVE="${KEEPALIVE:-1}"
 KEEPALIVE_INTERVAL="${KEEPALIVE_INTERVAL:-1500}"
@@ -158,17 +166,19 @@ tickle() { # keepalive: short ssh session on the current account
   fi
 }
 
-check_once() {
+check_once() { # rc: 0 = healthy (was alive, or failover recovered it), 1 = still down
   local code
   code=$(probe)
   if is_dead_code "$code"; then
     log "probe DOWN ($code) for $TUNNEL_HOST — failover starting"
     echo "$(ts) DOWN probe=$code" > "$STATUS_FILE"
     failover
+    return $?
   else
     log "alive ($code)"
     echo "$(ts) UP probe=$code account=$(cat "$CUR_FILE" 2>/dev/null || echo '?')" > "$STATUS_FILE"
     tickle
+    return 0
   fi
 }
 
@@ -179,20 +189,31 @@ if [ "$FORCE" = "1" ]; then
 fi
 
 FORCE_FLAG="$STATE_DIR/force-failover-requested"
-check_once
+FAIL_STREAK=0
+check_once && FAIL_STREAK=0 || FAIL_STREAK=1
 LAST_CHECK=$(date -u +%s)
 if [ "$LOOP" = "1" ]; then
   while sleep 10; do
     if [ -f "$FORCE_FLAG" ]; then
       rm -f "$FORCE_FLAG"
       log "force-failover flag seen — triggering immediately"
-      failover
+      failover && FAIL_STREAK=0 || FAIL_STREAK=$(( FAIL_STREAK + 1 ))
       LAST_CHECK=$(date -u +%s)
       continue
     fi
     NOW=$(date -u +%s)
-    if [ $(( NOW - ${LAST_CHECK:-0} )) -ge "$INTERVAL" ]; then
-      check_once
+    if [ "$FAIL_STREAK" -gt 0 ]; then
+      # capped exponential backoff while still down: retry sooner than a
+      # full INTERVAL, but never slower than one (so a persistent outage
+      # settles back to the normal cadence instead of retrying forever at
+      # the same fast pace)
+      WAIT=$(( RETRY_BASE_INTERVAL * (1 << (FAIL_STREAK - 1)) ))
+      [ "$WAIT" -gt "$INTERVAL" ] && WAIT="$INTERVAL"
+    else
+      WAIT="$INTERVAL"
+    fi
+    if [ $(( NOW - ${LAST_CHECK:-0} )) -ge "$WAIT" ]; then
+      check_once && FAIL_STREAK=0 || { [ "$FAIL_STREAK" -lt 20 ] && FAIL_STREAK=$(( FAIL_STREAK + 1 )); }
       LAST_CHECK=$NOW
     fi
   done
