@@ -7,6 +7,11 @@
 # a verbatim Clash proxies fragment, takes precedence if you prefer full
 # control over node fields).
 #
+# Merged with cf-optimized.txt (auto-refreshed every 2 days by
+# cf-optimize-refresh.sh, see supervise.sh) — entries here always win on a
+# duplicate domain. Put permanent hand-picked entries here; let the
+# auto-refreshed file handle the rotating CF-optimized domains/IPs.
+#
 # Example:
 # cf.090227.xyz CF优选·090227
 # www.visa.cn 伪装·VISA

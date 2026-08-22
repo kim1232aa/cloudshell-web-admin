@@ -21,13 +21,21 @@ async function loadStatus() {
 }
 
 async function loadAccounts() {
-  const data = await api('GET', '/api/accounts');
+  const [accountsData, proxiesData] = await Promise.all([
+    api('GET', '/api/accounts'),
+    api('GET', '/api/proxies'),
+  ]);
   const tbody = document.querySelector('#accounts-table tbody');
   tbody.innerHTML = '';
-  for (const a of data.accounts) {
+  for (const a of accountsData.accounts) {
     const tr = document.createElement('tr');
+    const options = ['<option value="">直连</option>'].concat(
+      proxiesData.proxies.map(p =>
+        `<option value="${p.id}"${p.id === a.proxy_id ? ' selected' : ''}>${p.label}</option>`)
+    ).join('');
     tr.innerHTML = `<td>${a.name}</td><td>${a.email || ''}</td><td>${a.status}</td>` +
-      `<td>${a.proxy_label || '直连'}</td><td>${a.is_current ? '✓' : ''}</td>` +
+      `<td><select class="account-proxy-select" data-name="${a.name}">${options}</select></td>` +
+      `<td>${a.is_current ? '✓' : ''}</td>` +
       `<td><button data-name="${a.name}" class="delete-account">删除</button></td>`;
     tbody.appendChild(tr);
   }
@@ -36,6 +44,11 @@ async function loadAccounts() {
       if (!confirm(`确定删除账号 ${btn.dataset.name}？`)) return;
       await api('DELETE', `/api/accounts/${btn.dataset.name}`);
       loadAccounts();
+    });
+  }
+  for (const sel of document.querySelectorAll('.account-proxy-select')) {
+    sel.addEventListener('change', async () => {
+      await api('PUT', `/api/accounts/${sel.dataset.name}/proxy`, {proxy_id: sel.value || null});
     });
   }
 }
