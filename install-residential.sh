@@ -93,7 +93,10 @@ PY
 # --- supervisor + shell hook ---
 cp "$SCRIPT_DIR/supervise.sh" "$BIN/supervise.sh"
 cp "$SCRIPT_DIR/subserver.py" "$BIN/subserver.py"
-chmod +x "$BIN/supervise.sh"
+cp "$SCRIPT_DIR/cf-optimize-refresh.sh" "$BIN/cf-optimize-refresh.sh"
+chmod +x "$BIN/supervise.sh" "$BIN/cf-optimize-refresh.sh"
+# seed cf-optimized.txt now instead of waiting for supervise.sh's first refresh tick
+[ -f "$BIN/cf-optimized.txt" ] || bash "$BIN/cf-optimize-refresh.sh" || true
 HOOK='[ -f "$HOME/proxy-bin/supervise.sh" ] && ! pgrep -f "proxy-bin/supervise.sh" >/dev/null 2>&1 && setsid "$HOME/proxy-bin/supervise.sh" >/dev/null 2>&1 &'
 grep -qF 'proxy-bin/supervise.sh' "$HOME/.bashrc" 2>/dev/null || echo "$HOOK" >> "$HOME/.bashrc"
 

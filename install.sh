@@ -251,6 +251,9 @@ Content is generated per request from:
   - sub-front.yaml   : optional verbatim YAML fragment of front nodes (CF->CloudShell)
   - front-domains.txt: optional, one "domain [display name]" per line — front nodes
                        are generated from it when sub-front.yaml is absent
+  - cf-optimized.txt : optional, same line format, auto-refreshed periodically by
+                       cf-optimize-refresh.sh (see supervise.sh) — merged with
+                       front-domains.txt, deduped by domain (front-domains.txt wins)
   - kui local API    : live residential exit slots (state/egress/ISP), when the
                        residential layer (install-residential.sh) is installed
 
@@ -351,6 +354,23 @@ def _vless_node(name: str, domain: str, path: str) -> str:
     ))
 
 
+def _front_domain_entries() -> list[list[str]]:
+    """front-domains.txt entries, then cf-optimized.txt entries (auto-
+    refreshed, see cf-optimize-refresh.sh), deduped by domain — first match
+    wins so a hand-picked entry always beats the auto-fetched one."""
+    seen: set[str] = set()
+    out: list[list[str]] = []
+    for f in (BASE / "front-domains.txt", BASE / "cf-optimized.txt"):
+        if not f.exists():
+            continue
+        for p in _active_lines(f):
+            if p[0] in seen:
+                continue
+            seen.add(p[0])
+            out.append(p)
+    return out
+
+
 def front_block() -> tuple[str, list[str]]:
     """Return (yaml fragment, node names) for the static CF front nodes."""
     if FRONT_FILE.exists():
@@ -358,10 +378,10 @@ def front_block() -> tuple[str, list[str]]:
         names = [ln.split('"')[1] for ln in frag.splitlines()
                  if ln.strip().startswith("- name:") and '"' in ln]
         return frag, names
-    f = BASE / "front-domains.txt"
-    if f.exists():
+    entries = _front_domain_entries()
+    if entries:
         nodes, names = [], []
-        for p in _active_lines(f):
+        for p in entries:
             name = p[1] if len(p) > 1 else p[0]
             nodes.append(_vless_node(name, p[0], "/vless"))
             names.append(name)
@@ -423,7 +443,7 @@ def res_node_yaml(slot: dict, domain: str, tag: str) -> str:
 
 def front_pairs() -> list[tuple[str, str]]:
     """(display name, entry domain) for each front node, from sub-front.yaml
-    or front-domains.txt — same sources as front_block()."""
+    or front-domains.txt/cf-optimized.txt — same sources as front_block()."""
     if FRONT_FILE.exists():
         pairs, name = [], None
         for ln in FRONT_FILE.read_text(encoding="utf-8").splitlines():
@@ -434,10 +454,7 @@ def front_pairs() -> list[tuple[str, str]]:
                 pairs.append((name, s.split(":", 1)[1].strip()))
                 name = None
         return pairs
-    f = BASE / "front-domains.txt"
-    if f.exists():
-        return [((p[1] if len(p) > 1 else p[0]), p[0]) for p in _active_lines(f)]
-    return []
+    return [((p[1] if len(p) > 1 else p[0]), p[0]) for p in _front_domain_entries()]
 
 
 def _live_exits() -> list[dict] | None:
