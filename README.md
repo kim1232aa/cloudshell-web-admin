@@ -1,7 +1,7 @@
-# cloudshell-proxy-autostart
+# cloudshell-web-admin
 
-> **Branch `kui-residential`**: adds an optional residential-IP exit layer
-> (kui / VPNGate pool behind sing-box, dynamic Clash subscription).
+> **Residential-IP exit layer** (optional): kui / VPNGate pool behind sing-box,
+> dynamic Clash subscription.
 > See [RESIDENTIAL.md](RESIDENTIAL.md).
 
 Self-healing VLESS+WS proxy on Google Cloud Shell, fronted by Cloudflare Tunnel —
@@ -67,7 +67,7 @@ anycast IP/domain for your ISP; keep `sni`/`host` unchanged.
 Inside [Google Cloud Shell](https://shell.cloud.google.com):
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/kim1232aa/cloudshell-proxy-autostart/main/install.sh)
+bash <(curl -sSL https://raw.githubusercontent.com/kim1232aa/cloudshell-web-admin/main/install.sh)
 ```
 
 It downloads xray + cloudflared into `~/proxy-bin`, installs `~/proxy-start.sh` and the
@@ -164,8 +164,8 @@ The same secret path also serves two non-Clash formats:
 ## 3. Watchdog container (self-contained monitor + failover)
 
 ```bash
-git clone https://github.com/kim1232aa/cloudshell-proxy-autostart
-cd cloudshell-proxy-autostart
+git clone https://github.com/kim1232aa/cloudshell-web-admin
+cd cloudshell-web-admin
 echo 'TUNNEL_HOST=gcs.example.com' > .env     # or your current quick-tunnel host
 docker compose up -d --build
 ```

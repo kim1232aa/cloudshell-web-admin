@@ -1,4 +1,4 @@
-# Residential exit layer (kui) — branch `kui-residential`
+# Residential exit layer (kui)
 
 Optional add-on that turns the Cloud Shell proxy into a **residential-IP exit**:
 traffic still enters through the Cloudflare named tunnel, but instead of leaving
@@ -28,8 +28,8 @@ Example: `exit-07` = `/res-07` = sing-box `:38096` = kui socks `:7926`.
 ## Install (inside Cloud Shell, after the base install + named tunnel)
 
 ```bash
-git clone -b kui-residential https://github.com/kim1232aa/cloudshell-proxy-autostart
-cd cloudshell-proxy-autostart
+git clone https://github.com/kim1232aa/cloudshell-web-admin
+cd cloudshell-web-admin
 bash install-residential.sh            # KUI_SLOT_COUNT=12 bash install-residential.sh for fewer slots
 ```
 

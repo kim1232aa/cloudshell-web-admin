@@ -1,6 +1,6 @@
 #!/bin/bash
 # install.sh — one-shot installer, run inside Google Cloud Shell:
-#   bash <(curl -sSL https://raw.githubusercontent.com/kim1232aa/cloudshell-proxy-autostart/main/install.sh)
+#   bash <(curl -sSL https://raw.githubusercontent.com/kim1232aa/cloudshell-web-admin/main/install.sh)
 #
 # Optional HA mode: before re-running proxy-start.sh, drop your named-tunnel
 # credentials into place:

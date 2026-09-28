@@ -1,6 +1,6 @@
 #!/bin/bash
 # install-residential.sh — add the kui residential-exit layer on top of an
-# existing cloudshell-proxy-autostart install. Run INSIDE Cloud Shell, after
+# existing cloudshell-web-admin install. Run INSIDE Cloud Shell, after
 # install.sh and the named-tunnel setup (cf-tunnel-creds.json + cf-hostname).
 #
 # What it does:
