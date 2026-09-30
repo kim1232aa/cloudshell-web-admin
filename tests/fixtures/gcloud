@@ -148,6 +148,14 @@ if [ "$1" = "cloud-shell" ]; then
       echo "Remote provisioning failed: simulated error" >&2
       exit 1
     fi
+    if [[ "$cmd" == *"GCS_CHECK"* ]]; then
+      if [ -n "${FAKE_CHECK_OUTPUT:-}" ]; then
+        echo "$FAKE_CHECK_OUTPUT"
+      else
+        echo "GCS_CHECK installed=1 cloudflared=1 supervise=1 link=1"
+      fi
+      exit 0
+    fi
     echo "Simulated remote execution success"
     echo "PROVISION_OK"
     exit 0

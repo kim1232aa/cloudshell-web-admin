@@ -25,35 +25,64 @@ async function loadStatus() {
   }
 }
 
+function maskUrl(url) {
+  return (url || '').replace(/(\/\/[^:/]+:)[^@]+@/, '$1***@');
+}
+
+function fmtTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function renderProvisionCell(a) {
   const p = a.provision || {};
-  const state = p.state || 'not_provisioned';
+  const r = a.remote || {};
+  const pState = p.state || 'not_provisioned';
+  const rState = r.state || 'never';
   let badge = '';
   let btnText = '部署';
-  if (state === 'ok') {
-    badge = '<span style="color:#28a745; font-weight:bold;">已部署</span>';
-    btnText = '重新部署';
-  } else if (state === 'running') {
+
+  if (pState === 'running') {
     badge = '<span style="color:#007bff; font-weight:bold;">部署中...</span>';
-  } else if (state === 'failed') {
+  } else if (rState === 'checking') {
+    badge = '<span style="color:#007bff;">检测中...</span>';
+  } else if (rState === 'installed') {
+    const run = r.cloudflared_running
+      ? '<span style="color:#28a745;">运行中</span>'
+      : '<span style="color:#856404;">待机</span>';
+    badge = `<span style="color:#28a745; font-weight:bold;">已部署</span>(${run}) <small>${fmtTime(r.checked_at)}</small>`;
+    btnText = '重新部署';
+  } else if (rState === 'not_installed') {
+    badge = `<span style="color:#6c757d;">未部署</span> <small>${fmtTime(r.checked_at)}</small>`;
+  } else if (rState === 'unreachable') {
+    badge = `<span style="color:#dc3545;" title="${(r.error || '').replace(/"/g, '&quot;')}">无法连接</span> <small>${fmtTime(r.checked_at)}</small>`;
+  } else if (pState === 'ok') {
+    badge = '<span style="color:#28a745;">已部署(本地记录,未验证)</span>';
+    btnText = '重新部署';
+  } else if (pState === 'failed') {
     badge = `<span style="color:#dc3545; font-weight:bold;" title="${p.error || ''}">失败</span>`;
     btnText = '重试';
-  } else if (state === 'interrupted') {
+  } else if (pState === 'interrupted') {
     badge = '<span style="color:#ffc107; font-weight:bold;">中断</span>';
     btnText = '重新部署';
   } else {
-    badge = '<span style="color:#6c757d;">未部署</span>';
+    badge = '<span style="color:#6c757d;">未部署(未验证)</span>';
   }
 
-  const viewLog = (state !== 'not_provisioned')
+  const viewLog = (pState !== 'not_provisioned')
     ? `<a href="#" class="view-prov-log" data-name="${a.name}" style="margin-left:6px; font-size:12px;">日志</a>`
     : '';
 
-  const actionBtn = (state === 'running')
+  const actionBtn = (pState === 'running')
     ? ''
     : `<button data-name="${a.name}" class="deploy-account" style="margin-left:6px; font-size:12px;">${btnText}</button>`;
 
-  return `${badge}${viewLog}${actionBtn}`;
+  const checkBtn = (rState === 'checking')
+    ? ''
+    : `<button data-name="${a.name}" class="check-account" style="margin-left:6px; font-size:12px;">检测</button>`;
+
+  return `${badge}${viewLog}${checkBtn}${actionBtn}`;
 }
 
 async function showProvisionLog(name) {
@@ -85,6 +114,7 @@ async function loadAccounts() {
   const tbody = document.querySelector('#accounts-table tbody');
   tbody.innerHTML = '';
   let hasRunningProvision = false;
+  let hasChecking = false;
 
   for (const a of accountsData.accounts) {
     const tr = document.createElement('tr');
@@ -97,6 +127,9 @@ async function loadAccounts() {
     if (a.provision && a.provision.state === 'running') {
       hasRunningProvision = true;
     }
+    if (a.remote && a.remote.state === 'checking') {
+      hasChecking = true;
+    }
 
     tr.innerHTML = `<td>${a.name}</td><td>${a.email || ''}</td><td>${a.status}</td>` +
       `<td><select class="account-proxy-select" data-name="${a.name}">${options}</select></td>` +
@@ -106,6 +139,14 @@ async function loadAccounts() {
     tbody.appendChild(tr);
   }
 
+  // Bind check-all button
+  document.getElementById('check-all-btn').onclick = async () => {
+    for (const a of accountsData.accounts) {
+      try { await api('POST', `/api/accounts/${a.name}/check`); } catch (e) {}
+    }
+    loadAccounts();
+  };
+
   // Bind delete handlers
   for (const btn of document.querySelectorAll('.delete-account')) {
     btn.addEventListener('click', async () => {
@@ -113,7 +154,7 @@ async function loadAccounts() {
       const row = accountsData.accounts.find(x => x.name === name);
       let promptMsg = `确定删除账号 ${name}？`;
       if (row && row.is_current) {
-        promptMsg = `警告：账号 ${name} 是当前 watchdog 正在使用的活跃账号！\n确定删除该账号配置？`;
+        promptMsg = `警告：账号 ${name} 是当前 watchdog 正在使用的活跃账号！\n删除后会立即触发 failover 切换到其他账号。\n确定删除？`;
       }
       if (!confirm(promptMsg)) return;
 
@@ -155,6 +196,18 @@ async function loadAccounts() {
     });
   }
 
+  // Bind remote check buttons
+  for (const btn of document.querySelectorAll('.check-account')) {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('POST', `/api/accounts/${btn.dataset.name}/check`);
+        loadAccounts();
+      } catch (err) {
+        alert(`发起检测失败: ${err.message}`);
+      }
+    });
+  }
+
   // Bind view log links
   for (const link of document.querySelectorAll('.view-prov-log')) {
     link.addEventListener('click', (e) => {
@@ -163,10 +216,10 @@ async function loadAccounts() {
     });
   }
 
-  // If any deployment is in progress, poll accounts table every 5s
-  if (hasRunningProvision && !accountsPollTimer) {
+  // Poll while a deployment or remote check is in progress
+  if ((hasRunningProvision || hasChecking) && !accountsPollTimer) {
     accountsPollTimer = setInterval(loadAccounts, 5000);
-  } else if (!hasRunningProvision && accountsPollTimer) {
+  } else if (!hasRunningProvision && !hasChecking && accountsPollTimer) {
     clearInterval(accountsPollTimer);
     accountsPollTimer = null;
   }
@@ -180,7 +233,7 @@ async function loadProxies() {
   select.innerHTML = '<option value="">直连</option>';
   for (const p of data.proxies) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${p.label}</td><td>${p.url}</td>` +
+    tr.innerHTML = `<td>${p.label}</td><td>${maskUrl(p.url)}</td>` +
       `<td><button data-id="${p.id}" class="delete-proxy">删除</button></td>`;
     tbody.appendChild(tr);
     const opt = document.createElement('option');

@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,50}$")
 
+# gcloud built-in configs that are not real accounts — never managed via the panel.
+SYSTEM_CONFIGS = frozenset({"default"})
+
 _lock = threading.Lock()
 
 

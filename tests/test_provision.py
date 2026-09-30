@@ -92,6 +92,33 @@ class TestProvision(unittest.TestCase):
         self.assertEqual(st.get("state"), "failed")
         self.assertIn("error", st)
 
+    def test_parse_remote_check_output(self):
+        out = "noise\nGCS_CHECK installed=1 cloudflared=2 supervise=1 link=1\nother"
+        parsed = provision.parse_remote_check_output(out)
+        self.assertIsNotNone(parsed)
+        self.assertTrue(parsed["installed"])
+        self.assertTrue(parsed["cloudflared_running"])
+        self.assertTrue(parsed["supervise_running"])
+        self.assertTrue(parsed["has_proxy_link"])
+
+    def test_parse_remote_check_output_not_installed(self):
+        out = "GCS_CHECK installed=0 cloudflared=0 supervise=0 link=0"
+        parsed = provision.parse_remote_check_output(out)
+        self.assertFalse(parsed["installed"])
+        self.assertFalse(parsed["cloudflared_running"])
+
+    def test_remote_check_flow_installed(self):
+        provision.start_remote_check("acct-b")
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            res = provision.get_remote_check("acct-b")
+            if res.get("state") in ("installed", "not_installed", "unreachable"):
+                break
+            time.sleep(0.05)
+        res = provision.get_remote_check("acct-b")
+        self.assertEqual(res.get("state"), "installed")
+        self.assertTrue(res.get("cloudflared_running"))
+
 
 if __name__ == "__main__":
     unittest.main()

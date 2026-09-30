@@ -519,15 +519,111 @@ def start_provision(account_name: str) -> None:
 
 def cleanup_provision_data(account_name: str) -> None:
     """Remove provision status and log files for account_name."""
-    try:
-        sf = state_paths.provision_status_file(account_name)
-        if os.path.exists(sf):
-            os.unlink(sf)
-    except Exception:
-        pass
-    try:
-        lf = state_paths.provision_log_file(account_name)
-        if os.path.exists(lf):
-            os.unlink(lf)
-    except Exception:
-        pass
+    for f in (state_paths.provision_status_file(account_name),
+              state_paths.provision_log_file(account_name),
+              state_paths.remote_check_file(account_name)):
+        try:
+            if os.path.exists(f):
+                os.unlink(f)
+        except Exception:
+            pass
+
+
+# --- Remote deployment probing (read-only SSH inspection) ---
+
+_remote_check_threads: dict[str, threading.Thread] = {}
+
+_REMOTE_CHECK_CMD = (
+    'i=0; [ -f "$HOME/proxy-start.sh" ] && i=1; '
+    'cf=$(pgrep -c cloudflared 2>/dev/null || true); '
+    'sup=$(pgrep -cf "supervise.sh" 2>/dev/null || true); '
+    'l=0; [ -s "$HOME/proxy-link.txt" ] && l=1; '
+    'echo "GCS_CHECK installed=$i cloudflared=${cf:-0} supervise=${sup:-0} link=$l"'
+)
+
+
+def parse_remote_check_output(output: str) -> dict[str, Any] | None:
+    """Parse the GCS_CHECK marker line. Returns None if not found (e.g. ssh noise only)."""
+    for line in output.splitlines():
+        line = line.strip()
+        if not line.startswith("GCS_CHECK "):
+            continue
+        fields = {}
+        for tok in line.split()[1:]:
+            if "=" in tok:
+                k, _, v = tok.partition("=")
+                fields[k] = v
+        try:
+            return {
+                "installed": fields.get("installed") == "1",
+                "cloudflared_running": int(fields.get("cloudflared", "0")) > 0,
+                "supervise_running": int(fields.get("supervise", "0")) > 0,
+                "has_proxy_link": fields.get("link") == "1",
+            }
+        except ValueError:
+            return None
+    return None
+
+
+def _write_remote_check(account_name: str, data: dict[str, Any]) -> None:
+    data = {**data, "account": account_name, "checked_at": int(time.time())}
+    with open(state_paths.remote_check_file(account_name), "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def get_remote_check(account_name: str) -> dict[str, Any]:
+    """Return cached remote probe result. state: never|checking|installed|not_installed|unreachable"""
+    cf = state_paths.remote_check_file(account_name)
+    data: dict[str, Any] = {"account": account_name, "state": "never"}
+    if os.path.exists(cf):
+        try:
+            with open(cf, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    with _provision_lock:
+        t = _remote_check_threads.get(account_name)
+        if t and t.is_alive():
+            data["state"] = "checking"
+    return data
+
+
+def start_remote_check(account_name: str) -> None:
+    """SSH into the account's Cloud Shell (may wake the VM) and probe deployment state."""
+    gcloud_accounts.validate_name(account_name)
+    with _provision_lock:
+        t = _remote_check_threads.get(account_name)
+        if t and t.is_alive():
+            return
+
+        def _worker():
+            try:
+                res = _run_gcloud_ssh(account_name, _REMOTE_CHECK_CMD, timeout=180, check=False)
+                if res.returncode != 0:
+                    _write_remote_check(account_name, {
+                        "state": "unreachable",
+                        "error": (res.stderr or res.stdout or "").strip()[-300:],
+                    })
+                    return
+                parsed = parse_remote_check_output(res.stdout)
+                if parsed is None:
+                    _write_remote_check(account_name, {
+                        "state": "unreachable", "error": "unexpected probe output",
+                    })
+                    return
+                _write_remote_check(account_name, {
+                    "state": "installed" if parsed["installed"] else "not_installed",
+                    **parsed,
+                })
+            except Exception as e:
+                try:
+                    _write_remote_check(account_name, {"state": "unreachable", "error": str(e)[:300]})
+                except Exception:
+                    pass
+            finally:
+                with _provision_lock:
+                    _remote_check_threads.pop(account_name, None)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        _remote_check_threads[account_name] = thread
+        thread.start()

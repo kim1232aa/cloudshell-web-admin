@@ -60,3 +60,9 @@ def provision_log_file(account_name: str) -> str:
     if not _SAFE_ACCOUNT_RE.match(account_name):
         raise ValueError(f"invalid account name for provision log: {account_name!r}")
     return os.path.join(state_dir(), f"provision-{account_name}.log")
+
+
+def remote_check_file(account_name: str) -> str:
+    if not _SAFE_ACCOUNT_RE.match(account_name):
+        raise ValueError(f"invalid account name for remote check: {account_name!r}")
+    return os.path.join(state_dir(), f"remote-check-{account_name}.json")

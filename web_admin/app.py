@@ -137,12 +137,14 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_session():
                 return
             proxies_by_url = {p["url"]: p for p in proxy_pool.list_proxies()}
-            accounts = gcloud_accounts.list_accounts()
+            accounts = [a for a in gcloud_accounts.list_accounts()
+                        if a["name"] not in gcloud_accounts.SYSTEM_CONFIGS]
             for a in accounts:
                 p = proxies_by_url.get(a["proxy_url"])
                 a["proxy_label"] = p["label"] if p else a["proxy_url"]
                 a["proxy_id"] = p["id"] if p else None
                 a["provision"] = provision.get_provision_status(a["name"])
+                a["remote"] = provision.get_remote_check(a["name"])
             self._send_json(HTTPStatus.OK, {"accounts": accounts})
             return
         m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/output$", path)
@@ -234,6 +236,17 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send_json(HTTPStatus.OK, {"ok": True})
             return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/check$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            try:
+                provision.start_remote_check(m.group(1))
+            except gcloud_accounts.InvalidAccountName as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
         if path == "/api/proxies":
             if not (self._require_session() and self._require_same_origin()):
                 return
@@ -260,6 +273,10 @@ class Handler(BaseHTTPRequestHandler):
             if not (self._require_session() and self._require_same_origin()):
                 return
             name = m.group(1)
+            if name in gcloud_accounts.SYSTEM_CONFIGS:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"cannot delete system config: {name}"})
+                return
+            was_current = (gcloud_accounts.current_account_name() == name)
             try:
                 res = gcloud_accounts.delete_account(name)
                 provision.cleanup_provision_data(name)
@@ -269,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
                 return
+            if was_current:
+                Path(state_paths.force_failover_flag()).touch()
+                res["warning"] = "已删除当前活跃账号，已请求 watchdog 立即 failover"
             self._send_json(HTTPStatus.OK, {"ok": True, **res})
             return
         m = re.match(r"^/api/proxies/([a-zA-Z0-9]{1,32})$", path)
