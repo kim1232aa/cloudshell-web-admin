@@ -310,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_login(self) -> None:
         ip = self._client_ip()
-        if not rate_limiter.allow_attempt(ip):
+        if rate_limiter.is_locked(ip):
             self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "too many attempts, try again later"})
             return
         body = _read_json_body(self)
@@ -319,8 +319,8 @@ class Handler(BaseHTTPRequestHandler):
             rate_limiter.record_failure(ip)
             self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid password"})
             return
-        rate_limiter.reset(ip)
-        cookie_val = auth.create_session_cookie(SESSION_SECRET)
+        rate_limiter.record_success(ip)
+        cookie_val = auth.make_session_cookie(SESSION_SECRET)
         cookie = SimpleCookie()
         cookie[SESSION_COOKIE] = cookie_val
         cookie[SESSION_COOKIE]["path"] = "/"
