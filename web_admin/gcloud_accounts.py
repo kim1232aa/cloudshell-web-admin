@@ -17,7 +17,7 @@ import state_paths
 
 logger = logging.getLogger(__name__)
 
-NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,50}$")
+NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,49}$")
 
 # gcloud built-in configs that are not real accounts — never managed via the panel.
 SYSTEM_CONFIGS = frozenset({"default"})
@@ -33,9 +33,30 @@ class AccountError(RuntimeError):
     pass
 
 
+def normalize_account_name(raw: str) -> str:
+    """Normalize user input (e.g. email or arbitrary tag) into a valid gcloud configuration name.
+
+    gcloud rule: starts with [a-z], followed by [a-z0-9-], max length 50.
+    Example: 'jiejinyan1992@gmail.com' -> 'jiejinyan1992'
+    """
+    s = (raw or "").strip().lower()
+    if "@" in s:
+        s = s.split("@")[0]
+    # replace non-alphanumeric chars with hyphens
+    s = re.sub(r"[^a-z0-9-]", "-", s)
+    s = re.sub(r"-+", "-", s).strip("-")
+    if not s or not s[0].isalpha():
+        s = f"acct-{s}" if s else "acct-new"
+    return s[:50]
+
+
 def validate_name(name: str) -> None:
     if not NAME_RE.match(name):
-        raise InvalidAccountName(f"invalid account name: {name!r}")
+        raise InvalidAccountName(
+            f"invalid account name: {name!r}. "
+            "Must start with a lowercase letter and contain only lowercase letters (a-z), "
+            "digits (0-9), and hyphens (-), max 50 chars."
+        )
 
 
 def _gcloud_env(proxy_url: str | None = None) -> dict:

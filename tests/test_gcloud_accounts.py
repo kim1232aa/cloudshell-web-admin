@@ -23,9 +23,19 @@ class TestValidateName(unittest.TestCase):
         with self.assertRaises(gcloud_accounts.InvalidAccountName):
             gcloud_accounts.validate_name("acct-a; rm -rf /")
 
+    def test_rejects_uppercase_or_underscore(self):
+        with self.assertRaises(gcloud_accounts.InvalidAccountName):
+            gcloud_accounts.validate_name("Acct_A")
+
     def test_rejects_too_long(self):
         with self.assertRaises(gcloud_accounts.InvalidAccountName):
             gcloud_accounts.validate_name("a" * 51)
+
+    def test_normalize_account_name(self):
+        self.assertEqual(gcloud_accounts.normalize_account_name("jiejinyan1992@gmail.com"), "jiejinyan1992")
+        self.assertEqual(gcloud_accounts.normalize_account_name("123user@gmail.com"), "acct-123user")
+        self.assertEqual(gcloud_accounts.normalize_account_name("User.Name_Test@gmail.com"), "user-name-test")
+        self.assertEqual(gcloud_accounts.normalize_account_name(""), "acct-new")
 
 
 class TestWithFakeGcloud(unittest.TestCase):

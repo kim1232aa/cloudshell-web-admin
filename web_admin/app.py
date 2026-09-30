@@ -198,16 +198,18 @@ class Handler(BaseHTTPRequestHandler):
             proxy_id = body.get("proxy_id")
             if proxy_id:
                 proxy_url = proxy_pool.get_proxy_url(proxy_id)
+            raw_name = body.get("name", "")
+            name = gcloud_accounts.normalize_account_name(raw_name)
             try:
                 gcloud_accounts.start_login(
-                    body.get("name", ""),
+                    name,
                     proxy_url,
                     on_success=_on_login_success,
                 )
             except gcloud_accounts.InvalidAccountName as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
-            self._send_json(HTTPStatus.OK, {"ok": True})
+            self._send_json(HTTPStatus.OK, {"ok": True, "name": name})
             return
         m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/input$", path)
         if m:

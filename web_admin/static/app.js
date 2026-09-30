@@ -299,16 +299,20 @@ document.getElementById('add-account-btn').addEventListener('click', () => {
 document.getElementById('cancel-add-account').addEventListener('click', () => dialog.close());
 
 let pollTimer = null;
+let currentLoginAccountName = null;
 document.getElementById('add-account-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const name = document.getElementById('new-account-name').value;
+  const rawName = document.getElementById('new-account-name').value;
   const proxy_id = document.getElementById('new-account-proxy').value || null;
+  let res;
   try {
-    await api('POST', '/api/accounts', {name, proxy_id});
+    res = await api('POST', '/api/accounts', {name: rawName, proxy_id});
   } catch (err) {
     alert(`发起登录失败: ${err.message}`);
     return;
   }
+  const name = res.name || rawName;
+  currentLoginAccountName = name;
   document.getElementById('add-account-form').style.display = 'none';
   document.getElementById('login-code-form').style.display = 'block';
 
@@ -349,7 +353,7 @@ document.getElementById('add-account-form').addEventListener('submit', async (e)
 
 document.getElementById('login-code-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const name = document.getElementById('new-account-name').value;
+  const name = currentLoginAccountName || document.getElementById('new-account-name').value;
   const text = document.getElementById('login-code').value.trim();
   try {
     await api('POST', `/api/accounts/${name}/input`, {text});
