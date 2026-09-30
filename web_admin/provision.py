@@ -142,8 +142,8 @@ def _run_gcloud_scp(
     args = [
         "gcloud", "cloud-shell", "scp",
         "--quiet",
-        "--ssh-flag=-oBatchMode=yes",
-        "--ssh-flag=-oStrictHostKeyChecking=no",
+        "--scp-flag=-oBatchMode=yes",
+        "--scp-flag=-oStrictHostKeyChecking=no",
         src,
         dest,
     ]
