@@ -1,24 +1,55 @@
 #!/bin/bash
 # tests/fixtures/gcloud — stand-in for the real `gcloud` CLI in tests.
-# Named literally "gcloud" (not "fake_gcloud") so that prepending this
-# directory to PATH actually shadows the real binary during subprocess lookup.
-# Behavior is driven by argv/env only; no network, no real credentials.
-#
-# print-access-token succeeds for acct-a/acct-b unconditionally (pre-seeded
-# "existing" test accounts), always fails for acct-broken, and otherwise
-# succeeds only after a matching `auth login` run wrote a marker file — this
-# mirrors real gcloud: a login that never completed leaves no valid token.
 set -u
 
 STATE="${CLOUDSDK_CONFIG:-/tmp}/fake-gcloud-auth-ok"
 mkdir -p "$STATE" 2>/dev/null || true
 
+# Optional call logger for test assertions
+if [ -n "${FAKE_GCLOUD_LOG:-}" ]; then
+  printf "%s\n" "$*" >> "$FAKE_GCLOUD_LOG"
+fi
+
 if [ "$1" = "config" ] && [ "$2" = "configurations" ]; then
   case "$3" in
-    list) echo "acct-a"; echo "acct-b"; exit 0 ;;
+    list)
+      # If format is json, provide json output matching active config
+      if [[ "$*" == *"--format=json"* ]]; then
+        active_cfg="default"
+        if [ -f "${CLOUDSDK_CONFIG:-/tmp}/active_config" ]; then
+          active_cfg=$(cat "${CLOUDSDK_CONFIG:-/tmp}/active_config")
+        fi
+        cat << JSON
+[
+  {"name": "default", "is_active": $([ "$active_cfg" = "default" ] && echo true || echo false), "properties": {"core": {}}},
+  {"name": "acct-a", "is_active": $([ "$active_cfg" = "acct-a" ] && echo true || echo false), "properties": {"core": {"account": "fake-acct-a@example.com"}}},
+  {"name": "acct-b", "is_active": $([ "$active_cfg" = "acct-b" ] && echo true || echo false), "properties": {"core": {"account": "fake-acct-b@example.com"}}}
+]
+JSON
+        exit 0
+      fi
+      echo "acct-a"; echo "acct-b"; exit 0 ;;
     describe) exit 0 ;;
     create) exit 0 ;;
-    delete) exit 0 ;;
+    activate)
+      mkdir -p "${CLOUDSDK_CONFIG:-/tmp}"
+      echo "$4" > "${CLOUDSDK_CONFIG:-/tmp}/active_config"
+      exit 0 ;;
+    delete)
+      target="$4"
+      active_cfg="default"
+      if [ -f "${CLOUDSDK_CONFIG:-/tmp}/active_config" ]; then
+        active_cfg=$(cat "${CLOUDSDK_CONFIG:-/tmp}/active_config")
+      fi
+      if [ "$target" = "$active_cfg" ]; then
+        echo "ERROR: Cannot delete the active configuration [$target]." >&2
+        exit 1
+      fi
+      if [ -n "${FAKE_FAIL_DELETE:-}" ]; then
+        echo "ERROR: simulated delete failure" >&2
+        exit 1
+      fi
+      exit 0 ;;
   esac
 fi
 
@@ -40,6 +71,14 @@ if [ "$1" = "auth" ] && [ "$2" = "list" ]; then
   exit 0
 fi
 
+if [ "$1" = "auth" ] && [ "$2" = "revoke" ]; then
+  if [ -n "${FAKE_FAIL_REVOKE:-}" ]; then
+    echo "ERROR: simulated revoke failure" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
 if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   echo "Go to the following link in your browser:"
   echo "    https://accounts.google.com/o/oauth2/auth?fake=1"
@@ -53,6 +92,66 @@ if [ "$1" = "auth" ] && [ "$2" = "login" ]; then
   fi
   echo "Invalid code." >&2
   exit 1
+fi
+
+if [ "$1" = "cloud-shell" ]; then
+  subcmd="$2"
+  if [ "$subcmd" = "scp" ]; then
+    if [ -n "${FAKE_FAIL_SCP:-}" ]; then
+      echo "ERROR: simulated scp failure" >&2
+      exit 1
+    fi
+    # Handle scp: gcloud cloud-shell scp <src> <dest> ...
+    # Find src and dest from args
+    src=""
+    dest=""
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --*) shift ;;
+        *)
+          if [ -z "$src" ]; then src="$1"; else dest="$1"; fi
+          shift ;;
+      esac
+    done
+    if [ -n "${dest:-}" ]; then
+      # Strip localhost: prefix if any
+      clean_dest="${dest#localhost:}"
+      clean_src="${src#localhost:}"
+      # If destination is local file
+      if [[ "$dest" != cloudshell:* ]]; then
+        mkdir -p "$(dirname "$clean_dest")" 2>/dev/null || true
+        # If src was remote cloudshell:, simulate bundle download
+        echo "fake bundle payload" > "$clean_dest"
+      fi
+    fi
+    exit 0
+  elif [ "$subcmd" = "ssh" ]; then
+    if [ -n "${FAKE_FAIL_SSH:-}" ]; then
+      echo "ERROR: simulated ssh failure" >&2
+      exit 1
+    fi
+    # Parse --command
+    cmd=""
+    for arg in "$@"; do
+      if [[ "$arg" == --command=* ]]; then
+        cmd="${arg#--command=}"
+      fi
+    done
+    if [ -n "${FAKE_PULL_BUNDLE_PAYLOAD:-}" ] && [[ "$cmd" == *"PULL_BUNDLE_BEGIN"* ]]; then
+      echo "PULL_BUNDLE_BEGIN"
+      echo "$FAKE_PULL_BUNDLE_PAYLOAD"
+      echo "PULL_BUNDLE_END"
+      exit 0
+    fi
+    if [ -n "${FAKE_PROVISION_FAIL:-}" ]; then
+      echo "Remote provisioning failed: simulated error" >&2
+      exit 1
+    fi
+    echo "Simulated remote execution success"
+    echo "PROVISION_OK"
+    exit 0
+  fi
 fi
 
 exit 0

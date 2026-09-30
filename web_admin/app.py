@@ -1,11 +1,12 @@
 """HTTP server for the cloudshell-web-admin panel.
 
 Plain stdlib http.server — no framework — matching this project's existing
-services (subserver.py, watchdog.sh). Routes for accounts/proxies are added
-in later tasks; this task wires the server, login, session, and static files.
+services (subserver.py, watchdog.sh).
 """
 import json
+import logging
 import os
+import re
 import sys
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -14,11 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import auth  # noqa: E402
-import re
+import gcloud_accounts  # noqa: E402
+import provision  # noqa: E402
+import proxy_pool  # noqa: E402
+import state_paths  # noqa: E402
 
-import gcloud_accounts
-import proxy_pool
-import state_paths
+logger = logging.getLogger(__name__)
 
 APP_DIR = Path(__file__).resolve().parent
 ADMIN_PASSWORD_HASH = os.environ["ADMIN_PASSWORD_HASH"]
@@ -44,6 +46,14 @@ def _has_valid_session(handler: BaseHTTPRequestHandler) -> bool:
     if SESSION_COOKIE not in cookie:
         return False
     return auth.verify_session_cookie(SESSION_SECRET, cookie[SESSION_COOKIE].value)
+
+
+def _on_login_success(account_name: str) -> None:
+    logger.info("Account %s login succeeded, triggering auto-provisioning...", account_name)
+    try:
+        provision.start_provision(account_name)
+    except Exception as e:
+        logger.warning("Failed to start auto-provision for %s: %s", account_name, e)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -97,11 +107,11 @@ class Handler(BaseHTTPRequestHandler):
         if not file_path.is_file():
             self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
-        content_type = (
-            "text/css" if rel.endswith(".css")
-            else "application/javascript" if rel.endswith(".js")
-            else "application/octet-stream"
-        )
+        content_type = "text/plain"
+        if rel.endswith(".css"):
+            content_type = "text/css"
+        elif rel.endswith(".js"):
+            content_type = "application/javascript"
         data = file_path.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
@@ -132,6 +142,7 @@ class Handler(BaseHTTPRequestHandler):
                 p = proxies_by_url.get(a["proxy_url"])
                 a["proxy_label"] = p["label"] if p else a["proxy_url"]
                 a["proxy_id"] = p["id"] if p else None
+                a["provision"] = provision.get_provision_status(a["name"])
             self._send_json(HTTPStatus.OK, {"accounts": accounts})
             return
         m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/output$", path)
@@ -142,6 +153,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, gcloud_accounts.login_output(m.group(1)))
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "no login in progress"})
+            return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/provision$", path)
+        if m:
+            if not self._require_session():
+                return
+            name = m.group(1)
+            status_data = provision.get_provision_status(name)
+            log_text = provision.get_provision_log(name, max_lines=150)
+            self._send_json(HTTPStatus.OK, {**status_data, "log": log_text})
             return
         if path == "/api/proxies":
             if not self._require_session():
@@ -177,7 +197,11 @@ class Handler(BaseHTTPRequestHandler):
             if proxy_id:
                 proxy_url = proxy_pool.get_proxy_url(proxy_id)
             try:
-                gcloud_accounts.start_login(body.get("name", ""), proxy_url)
+                gcloud_accounts.start_login(
+                    body.get("name", ""),
+                    proxy_url,
+                    on_success=_on_login_success,
+                )
             except gcloud_accounts.InvalidAccountName as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
@@ -192,6 +216,21 @@ class Handler(BaseHTTPRequestHandler):
                 gcloud_accounts.send_login_input(m.group(1), body.get("text", ""))
             except KeyError:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "no login in progress"})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/provision$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            name = m.group(1)
+            try:
+                provision.start_provision(name)
+            except provision.ProvisionError as exc:
+                self._send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                return
+            except Exception as exc:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
                 return
             self._send_json(HTTPStatus.OK, {"ok": True})
             return
@@ -220,8 +259,17 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             if not (self._require_session() and self._require_same_origin()):
                 return
-            gcloud_accounts.delete_account(m.group(1))
-            self._send_json(HTTPStatus.OK, {"ok": True})
+            name = m.group(1)
+            try:
+                res = gcloud_accounts.delete_account(name)
+                provision.cleanup_provision_data(name)
+            except (gcloud_accounts.AccountError, gcloud_accounts.InvalidAccountName) as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            except Exception as exc:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True, **res})
             return
         m = re.match(r"^/api/proxies/([a-zA-Z0-9]{1,32})$", path)
         if m:
@@ -234,10 +282,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = self.path.split("?", 1)[0]
-        # Rebind an *existing*, already-authenticated account to a different
-        # proxy (or back to direct) without touching its gcloud credentials —
-        # the only other way to set this is at account-creation time, which
-        # doesn't help accounts added via the old CLI flow.
         m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/proxy$", path)
         if m:
             if not (self._require_session() and self._require_same_origin()):
@@ -250,64 +294,88 @@ class Handler(BaseHTTPRequestHandler):
                 return
             body = _read_json_body(self)
             proxy_id = body.get("proxy_id")
-            proxy_url = proxy_pool.get_proxy_url(proxy_id) if proxy_id else None
+            if proxy_id is not None and not isinstance(proxy_id, str):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "proxy_id must be a string or null"})
+                return
+            proxy_url = None
+            if proxy_id:
+                proxy_url = proxy_pool.get_proxy_url(proxy_id)
+                if not proxy_url:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "proxy not found"})
+                    return
             gcloud_accounts.write_account_proxy_url(name, proxy_url)
-            self._send_json(HTTPStatus.OK, {"ok": True})
+            self._send_json(HTTPStatus.OK, {"ok": True, "proxy_id": proxy_id, "proxy_url": proxy_url})
             return
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
-    def _status_payload(self) -> dict:
-        link_path = Path(state_paths.proxy_link_file())
-        link = link_path.read_text().splitlines()[0] if link_path.exists() else None
-        name = gcloud_accounts.current_account_name()
-        return {"proxy_link": link, "current_account_name": name}
-
-    def _tail_log(self, n: int) -> list[str]:
-        log_path = Path(state_paths.watchdog_log_file())
-        if not log_path.exists():
-            return []
-        return log_path.read_text().splitlines()[-n:]
-
     def _handle_login(self) -> None:
         ip = self._client_ip()
-        if rate_limiter.is_locked(ip):
-            self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "too many attempts, try later"})
+        if not rate_limiter.allow_attempt(ip):
+            self._send_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "too many attempts, try again later"})
             return
         body = _read_json_body(self)
         password = body.get("password", "")
         if not auth.verify_password(password, ADMIN_PASSWORD_HASH):
             rate_limiter.record_failure(ip)
-            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "wrong password"})
+            self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid password"})
             return
-        rate_limiter.record_success(ip)
-        cookie_value = auth.make_session_cookie(SESSION_SECRET)
-        body_bytes = json.dumps({"ok": True}).encode()
+        rate_limiter.reset(ip)
+        cookie_val = auth.create_session_cookie(SESSION_SECRET)
+        cookie = SimpleCookie()
+        cookie[SESSION_COOKIE] = cookie_val
+        cookie[SESSION_COOKIE]["path"] = "/"
+        cookie[SESSION_COOKIE]["httponly"] = True
+        cookie[SESSION_COOKIE]["samesite"] = "Strict"
+        body_bytes = json.dumps({"ok": True}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
-        self.send_header(
-            "Set-Cookie",
-            f"{SESSION_COOKIE}={cookie_value}; HttpOnly; Secure; SameSite=Lax; "
-            f"Path=/; Max-Age={auth.SESSION_TTL_SECONDS}",
-        )
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body_bytes)))
+        self.send_header("Set-Cookie", cookie[SESSION_COOKIE].OutputString())
         self.end_headers()
         self.wfile.write(body_bytes)
 
     def _handle_logout(self) -> None:
-        body_bytes = json.dumps({"ok": True}).encode()
+        cookie = SimpleCookie()
+        cookie[SESSION_COOKIE] = ""
+        cookie[SESSION_COOKIE]["path"] = "/"
+        cookie[SESSION_COOKIE]["max-age"] = "0"
+        cookie[SESSION_COOKIE]["httponly"] = True
+        body_bytes = json.dumps({"ok": True}).encode("utf-8")
         self.send_response(HTTPStatus.OK)
-        self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0")
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body_bytes)))
+        self.send_header("Set-Cookie", cookie[SESSION_COOKIE].OutputString())
         self.end_headers()
         self.wfile.write(body_bytes)
 
+    def _status_payload(self) -> dict:
+        proxy_link = ""
+        pl_path = Path(state_paths.proxy_link_file())
+        if pl_path.exists():
+            proxy_link = pl_path.read_text().strip()
+        return {
+            "current_account": gcloud_accounts.current_account_name(),
+            "proxy_link": proxy_link,
+        }
 
-def main() -> None:
-    port = int(os.environ.get("PORT", "8080"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    def _tail_log(self, n: int) -> list[str]:
+        log_path = Path(state_paths.watchdog_log_file())
+        if not log_path.exists():
+            return []
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                return [line.rstrip("\r\n") for line in lines[-n:]]
+        except Exception:
+            return []
+
+
+def run(host: str = "0.0.0.0", port: int = 8080) -> None:
+    server = ThreadingHTTPServer((host, port), Handler)
+    print(f"cloudshell-web-admin listening on {host}:{port}")
     server.serve_forever()
 
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("ADMIN_PORT", 8080))
+    run(port=port)

@@ -45,6 +45,24 @@ class TestStatePaths(unittest.TestCase):
             state_paths.gcloud_auth_log_file("acct-a"), "/tmp/test-state/gcloud-auth-acct-a.log"
         )
 
+    def test_ssh_key_file(self):
+        self.assertEqual(state_paths.ssh_key_file(), "/tmp/test-state/ssh/google_compute_engine")
+
+    def test_provision_cache_dir(self):
+        self.assertEqual(state_paths.provision_cache_dir(), "/tmp/test-state/provision-bundle")
+
+    def test_provision_status_file(self):
+        self.assertEqual(
+            state_paths.provision_status_file("acct-a"),
+            "/tmp/test-state/provision-acct-a.json",
+        )
+
+    def test_provision_log_file(self):
+        self.assertEqual(
+            state_paths.provision_log_file("acct-a"),
+            "/tmp/test-state/provision-acct-a.log",
+        )
+
     def test_default_state_dir_when_unset(self):
         del os.environ["STATE_DIR"]
         self.assertEqual(state_paths.proxies_file(), "/state/proxies.json")

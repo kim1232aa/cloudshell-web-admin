@@ -10,7 +10,7 @@ across multiple Google accounts when one dies or runs out of weekly quota.
 
 > 中文速览：Cloud Shell 里跑一行 `install.sh`，自动装好 xray(vless+ws) + cloudflared 并输出 vless:// 链接。
 > 本机只需 docker：watchdog 容器负责探活、保活、额度耗尽自动轮换账户（容器不过流量，中转由 Cloudflare 优选 IP 完成）。
-> 授权在容器内完成（`--no-browser`，浏览器部分你自己点），凭证全部留在容器卷里。
+> 授权在容器内完成（`--no-launch-browser`，浏览器部分你自己点），凭证全部留在容器卷里。
 
 ## Architecture
 
@@ -182,7 +182,7 @@ docker compose run --rm watchdog auth acct-a
 docker compose run --rm watchdog auth acct-b   # ...repeat per account
 ```
 
-Each runs `gcloud auth login --no-browser` **inside the container**: you open the
+Each runs `gcloud auth login --no-launch-browser` **inside the container**: you open the
 printed URL in your own browser, authorize, paste the result back. Credentials are
 stored only in the `./state` volume (`/state/gcloud`) — nothing is written to the host.
 No host gcloud installation or host ssh keys are needed; the container generates and

@@ -34,7 +34,7 @@ case "${1:-}" in
       || gcloud config configurations create "$name" --quiet
     echo "[*] Starting OAuth. Copy the URL into YOUR browser, authorize,"
     echo "    then paste the result back here. Nothing touches the host."
-    CLOUDSDK_ACTIVE_CONFIG_NAME="$name" gcloud auth login --no-browser --quiet
+    CLOUDSDK_ACTIVE_CONFIG_NAME="$name" gcloud auth login --no-launch-browser --quiet
     if CLOUDSDK_ACTIVE_CONFIG_NAME="$name" gcloud auth print-access-token >/dev/null 2>&1; then
       echo "[+] $name authorized and stored in the state volume."
       echo "    First Cloud Shell connect for this account will happen automatically on failover."

@@ -666,10 +666,16 @@ echo "[*] Installing ~/.customize_environment boot hook ..."
 cat > ~/.customize_environment <<'HOOK_EOF'
 #!/bin/bash
 # Cloud Shell boot hook — runs automatically as root when the instance boots.
-USER_HOME=$(ls -d /home/*/ 2>/dev/null | head -1)
+USER_HOME=""
+for d in /home/*; do
+  if [ -d "$d" ] && [ -f "$d/proxy-start.sh" ]; then
+    USER_HOME="$d"
+    break
+  fi
+done
 [ -z "$USER_HOME" ] && exit 0
 USER_NAME=$(basename "$USER_HOME")
-su - "$USER_NAME" -c "nohup $USER_HOME/proxy-start.sh >/dev/null 2>&1 &"
+su - "$USER_NAME" -c 'nohup /bin/bash "$HOME/proxy-start.sh" >/dev/null 2>&1 &'
 HOOK_EOF
 chmod +x ~/.customize_environment
 

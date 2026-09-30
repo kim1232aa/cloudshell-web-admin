@@ -18,10 +18,25 @@
   <section id="accounts-section">
     <h2>Google 账号</h2>
     <table id="accounts-table">
-      <thead><tr><th>名称</th><th>邮箱</th><th>状态</th><th>代理</th><th>当前</th><th></th></tr></thead>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>邮箱</th>
+          <th>状态</th>
+          <th>代理</th>
+          <th>当前</th>
+          <th>部署</th>
+          <th>操作</th>
+        </tr>
+      </thead>
       <tbody></tbody>
     </table>
     <button id="add-account-btn">添加账号</button>
+    <div id="provision-log-box" style="display:none; margin-top:1em;">
+      <h3>部署日志 (<span id="provision-log-account"></span>)</h3>
+      <pre id="provision-log-tail" style="max-height:240px; overflow:auto; background:#1e1e1e; color:#ccc; padding:10px; border-radius:4px; font-size:12px;"></pre>
+      <button type="button" id="close-provision-log">关闭日志</button>
+    </div>
   </section>
 
   <section id="proxies-section">
@@ -38,7 +53,7 @@
   </section>
 
   <section id="logs-section">
-    <h2>日志</h2>
+    <h2>Watchdog 日志</h2>
     <pre id="log-tail"></pre>
   </section>
 
@@ -49,9 +64,13 @@
       <button type="submit">开始登录</button>
       <button type="button" id="cancel-add-account">取消</button>
     </form>
+    <div id="login-helper" style="display:none; margin:10px 0; padding:8px; background:#f0f7ff; border:1px solid #b3d7ff; border-radius:4px; font-size:13px;">
+      请点击下方生成的 Google 授权链接（或复制到浏览器），完成登录授权后，将页面显示的<strong>验证码（Verification code）</strong>粘贴到下方输入框：
+      <div style="margin-top:6px;"><a id="login-auth-link" href="#" target="_blank" rel="noopener noreferrer" style="word-break:break-all; color:#0056b3; font-weight:bold;"></a></div>
+    </div>
     <pre id="login-output"></pre>
     <form id="login-code-form" style="display:none">
-      <input id="login-code" placeholder="粘贴验证码">
+      <input id="login-code" placeholder="粘贴验证码 (Verification code)" style="min-width:280px;" required>
       <button type="submit">提交</button>
     </form>
   </dialog>

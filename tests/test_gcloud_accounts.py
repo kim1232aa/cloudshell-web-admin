@@ -160,3 +160,61 @@ class TestLoginSession(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDeleteAccountAdvanced(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self._orig_state_dir = os.environ.get("STATE_DIR")
+        self._orig_path = os.environ["PATH"]
+        os.environ["STATE_DIR"] = self.tmpdir
+        os.environ["PATH"] = FIXTURES + os.pathsep + self._orig_path
+        self.log_file = os.path.join(self.tmpdir, "gcloud_calls.log")
+        os.environ["FAKE_GCLOUD_LOG"] = self.log_file
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        os.environ["PATH"] = self._orig_path
+        os.environ.pop("FAKE_GCLOUD_LOG", None)
+        os.environ.pop("FAKE_FAIL_DELETE", None)
+        os.environ.pop("FAKE_FAIL_REVOKE", None)
+        if self._orig_state_dir is None:
+            os.environ.pop("STATE_DIR", None)
+        else:
+            os.environ["STATE_DIR"] = self._orig_state_dir
+
+    def _calls(self):
+        if not os.path.exists(self.log_file):
+            return []
+        with open(self.log_file) as f:
+            return [line.strip() for line in f if line.strip()]
+
+    def test_delete_active_account_switches_first(self):
+        # Set active config to acct-a
+        gcloud_dir = os.path.join(self.tmpdir, "gcloud")
+        os.makedirs(gcloud_dir, exist_ok=True)
+        with open(os.path.join(gcloud_dir, "active_config"), "w") as f:
+            f.write("acct-a")
+
+        gcloud_accounts.delete_account("acct-a")
+        calls = self._calls()
+        # Verify activate default happened before delete acct-a
+        activate_idx = next(i for i, c in enumerate(calls) if "config configurations activate default" in c)
+        delete_idx = next(i for i, c in enumerate(calls) if "config configurations delete acct-a" in c)
+        self.assertLess(activate_idx, delete_idx)
+
+    def test_delete_revokes_unshared_email(self):
+        gcloud_accounts.delete_account("acct-b")
+        calls = self._calls()
+        self.assertTrue(any("auth revoke fake-acct-b@example.com" in c for c in calls))
+
+    def test_delete_failure_raises_account_error(self):
+        os.environ["FAKE_FAIL_DELETE"] = "1"
+        with self.assertRaises(gcloud_accounts.AccountError):
+            gcloud_accounts.delete_account("acct-b")
+
+    def test_delete_revoke_failure_returns_warning(self):
+        os.environ["FAKE_FAIL_REVOKE"] = "1"
+        res = gcloud_accounts.delete_account("acct-b")
+        self.assertIn("warning", res)
+        self.assertIn("凭证吊销失败", res["warning"])
