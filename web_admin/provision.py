@@ -77,6 +77,25 @@ def _cloudshell_scripts_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _ensure_ssh_keys() -> None:
+    """Ensure ~/.ssh has the persistent google_compute_engine keypair from /state/ssh."""
+    home_ssh = Path(os.path.expanduser("~/.ssh"))
+    home_ssh.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_key = Path(state_paths.ssh_key_file())
+    state_pub = Path(str(state_key) + ".pub")
+
+    if state_key.exists():
+        dst_key = home_ssh / "google_compute_engine"
+        if not dst_key.exists() or dst_key.stat().st_mtime < state_key.stat().st_mtime:
+            shutil.copy2(str(state_key), str(dst_key))
+            dst_key.chmod(0o600)
+    if state_pub.exists():
+        dst_pub = home_ssh / "google_compute_engine.pub"
+        if not dst_pub.exists() or dst_pub.stat().st_mtime < state_pub.stat().st_mtime:
+            shutil.copy2(str(state_pub), str(dst_pub))
+            dst_pub.chmod(0o644)
+
+
 def _run_gcloud_ssh(
     account_name: str,
     command: str,
@@ -87,7 +106,7 @@ def _run_gcloud_ssh(
     env = gcloud_accounts._gcloud_env(proxy_url)
     env["CLOUDSDK_ACTIVE_CONFIG_NAME"] = account_name
 
-    ssh_key = state_paths.ssh_key_file()
+    _ensure_ssh_keys()
     args = [
         "gcloud", "cloud-shell", "ssh",
         "--quiet",
@@ -95,8 +114,6 @@ def _run_gcloud_ssh(
         "--ssh-flag=-oBatchMode=yes",
         "--ssh-flag=-oStrictHostKeyChecking=no",
     ]
-    if os.path.exists(ssh_key):
-        args.append(f"--ssh-key-file={ssh_key}")
 
     res = subprocess.run(
         args,
@@ -121,7 +138,7 @@ def _run_gcloud_scp(
     env = gcloud_accounts._gcloud_env(proxy_url)
     env["CLOUDSDK_ACTIVE_CONFIG_NAME"] = account_name
 
-    ssh_key = state_paths.ssh_key_file()
+    _ensure_ssh_keys()
     args = [
         "gcloud", "cloud-shell", "scp",
         "--quiet",
@@ -130,8 +147,6 @@ def _run_gcloud_scp(
         src,
         dest,
     ]
-    if os.path.exists(ssh_key):
-        args.append(f"--ssh-key-file={ssh_key}")
 
     res = subprocess.run(
         args,
