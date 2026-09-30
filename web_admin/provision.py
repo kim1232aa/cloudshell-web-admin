@@ -406,9 +406,10 @@ def run_provision(account_name: str, log_fp=None) -> None:
         log(f"Created payload archive ({archive_size} bytes).")
 
         # Step 3: SCP tarball to Cloud Shell
-        remote_tar = "localhost:~/provision-payload.tar.gz"
+        local_src = f"localhost:{archive_path}"
+        remote_dest = "cloudshell:~/provision-payload.tar.gz"
         log("Uploading provision bundle to Cloud Shell (this may wake the VM)...")
-        _run_gcloud_scp(account_name, archive_path, remote_tar, timeout=240)
+        _run_gcloud_scp(account_name, local_src, remote_dest, timeout=240)
         log("Upload complete.")
 
         # Step 4: Extract and run remote runner

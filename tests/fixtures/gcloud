@@ -114,14 +114,18 @@ if [ "$1" = "cloud-shell" ]; then
           shift ;;
       esac
     done
+    if [[ "$src" != cloudshell:* && "$src" != localhost:* ]]; then
+      echo "ERROR: (gcloud.cloud-shell.scp) argument (cloudshell|localhost):SRC: Bad value [$src]: must start with cloudshell: or localhost:" >&2
+      exit 1
+    fi
+    if [[ "$dest" != cloudshell:* && "$dest" != localhost:* ]]; then
+      echo "ERROR: (gcloud.cloud-shell.scp) argument (cloudshell|localhost):DEST: Bad value [$dest]: must start with cloudshell: or localhost:" >&2
+      exit 1
+    fi
     if [ -n "${dest:-}" ]; then
-      # Strip localhost: prefix if any
       clean_dest="${dest#localhost:}"
-      clean_src="${src#localhost:}"
-      # If destination is local file
       if [[ "$dest" != cloudshell:* ]]; then
         mkdir -p "$(dirname "$clean_dest")" 2>/dev/null || true
-        # If src was remote cloudshell:, simulate bundle download
         echo "fake bundle payload" > "$clean_dest"
       fi
     fi
