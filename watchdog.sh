@@ -18,7 +18,7 @@
 #   TUNNEL_HOST may be given as env instead of the argument.
 #
 # Env knobs (all optional):
-#   INTERVAL=600             seconds between cycles in --loop mode, while healthy
+#   INTERVAL=60              seconds between cycles in --loop mode, while healthy
 #   RETRY_BASE_INTERVAL=30   seconds before the first retry after a cycle ends
 #                            still down (all accounts failed); doubles each
 #                            consecutive failure, capped at INTERVAL — so a
@@ -28,7 +28,7 @@
 #                            to the normal cadence instead of hammering gcloud
 #   PROBE_PROXY=             e.g. http://172.17.0.1:7890 — route probe via local proxy
 #   KEEPALIVE=1              0 disables the keepalive tickle
-#   KEEPALIVE_INTERVAL=1500  seconds between tickles (must stay < 40 min)
+#   KEEPALIVE_INTERVAL=300   seconds between tickles (Cloud Shell idle timeout is ~20 min)
 #   WS_PATH=/vless           probe path
 #   STATE_DIR=~/.cache/gcs-watchdog
 #
@@ -47,11 +47,11 @@ for a in "$@"; do
 done
 [ -z "$TUNNEL_HOST" ] && { echo "usage: watchdog.sh <tunnel-hostname> [--loop|--force]" >&2; exit 64; }
 
-INTERVAL="${INTERVAL:-600}"
+INTERVAL="${INTERVAL:-60}"
 RETRY_BASE_INTERVAL="${RETRY_BASE_INTERVAL:-30}"
 PROBE_PROXY="${PROBE_PROXY:-}"
 KEEPALIVE="${KEEPALIVE:-1}"
-KEEPALIVE_INTERVAL="${KEEPALIVE_INTERVAL:-1500}"
+KEEPALIVE_INTERVAL="${KEEPALIVE_INTERVAL:-300}"
 WS_PATH="${WS_PATH:-/vless}"
 STATE_DIR="${STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gcs-watchdog}"
 mkdir -p "$STATE_DIR"
