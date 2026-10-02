@@ -29,10 +29,12 @@ IPS=""
 for src in ct cu cmcc; do
   out=$(curl -s -m 8 "https://cf.090227.xyz/$src?ips=2" 2>/dev/null)
   [ -z "$out" ] && continue
+  idx=1
   while IFS='#' read -r ip tag; do
     [ -z "$ip" ] && continue
     tag=$(echo "${tag:-CF优选}" | tr -d ' ')
-    IPS+="$ip IP优选·$tag"$'\n'
+    IPS+="$ip IP优选·$tag-$idx"$'\n'
+    idx=$((idx + 1))
   done <<<"$out"
 done
 

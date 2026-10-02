@@ -132,6 +132,19 @@ def _front_domain_entries() -> list[list[str]]:
     return out
 
 
+def _unique_front_pairs() -> list[tuple[str, str]]:
+    """(unique display name, domain) from front sources."""
+    entries = _front_domain_entries()
+    pairs: list[tuple[str, str]] = []
+    counts: dict[str, int] = {}
+    for p in entries:
+        raw_name = p[1] if len(p) > 1 else p[0]
+        cnt = counts.get(raw_name, 0) + 1
+        counts[raw_name] = cnt
+        name = raw_name if cnt == 1 else f"{raw_name} ({cnt})"
+        pairs.append((name, p[0]))
+    return pairs
+
 def front_block() -> tuple[str, list[str]]:
     """Return (yaml fragment, node names) for the static CF front nodes."""
     if FRONT_FILE.exists():
@@ -139,13 +152,10 @@ def front_block() -> tuple[str, list[str]]:
         names = [ln.split('"')[1] for ln in frag.splitlines()
                  if ln.strip().startswith("- name:") and '"' in ln]
         return frag, names
-    entries = _front_domain_entries()
-    if entries:
-        nodes, names = [], []
-        for p in entries:
-            name = p[1] if len(p) > 1 else p[0]
-            nodes.append(_vless_node(name, p[0], "/vless"))
-            names.append(name)
+    pairs = _unique_front_pairs()
+    if pairs:
+        nodes = [_vless_node(name, domain, "/vless") for name, domain in pairs]
+        names = [name for name, _ in pairs]
         return "\n".join(nodes), names
     return "", []
 
@@ -215,7 +225,7 @@ def front_pairs() -> list[tuple[str, str]]:
                 pairs.append((name, s.split(":", 1)[1].strip()))
                 name = None
         return pairs
-    return [((p[1] if len(p) > 1 else p[0]), p[0]) for p in _front_domain_entries()]
+    return _unique_front_pairs()
 
 
 def _live_exits() -> list[dict] | None:
