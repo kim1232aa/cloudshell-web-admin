@@ -592,9 +592,9 @@ def build_yaml() -> str:
 
     g = ["proxy-groups:"]
     g.append('  - name: "🚀 节点选择"\n    type: select\n    proxies:\n' + lst(["⚡ 自动选择", "🏠 住宅自动"] + front_names + res_names + ["DIRECT"]))
-    g.append('  - name: "⚡ 自动选择"\n    type: url-test\n    url: "http://www.gstatic.com/generate_204"\n    interval: 300\n    tolerance: 100\n    proxies:\n' + lst(front_names))
+    g.append('  - name: "⚡ 自动选择"\n    type: url-test\n    url: "http://www.gstatic.com/generate_204"\n    interval: 60\n    tolerance: 100\n    lazy: false\n    proxies:\n' + lst(front_names))
     if pure_names:
-        g.append('  - name: "🏠 住宅自动"\n    type: url-test\n    url: "http://www.gstatic.com/generate_204"\n    interval: 300\n    tolerance: 150\n    proxies:\n' + lst(pure_names))
+        g.append('  - name: "🏠 住宅自动"\n    type: url-test\n    url: "http://www.gstatic.com/generate_204"\n    interval: 60\n    tolerance: 150\n    lazy: false\n    proxies:\n' + lst(pure_names))
     else:
         g.append('  - name: "🏠 住宅自动"\n    type: select\n    proxies:\n      - "🚀 节点选择"')
     for grp in ('🧠 Claude', '🤖 ChatGPT', '🔵 Google·Gemini'):
