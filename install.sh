@@ -248,12 +248,11 @@ Serves ONE secret path (read from `sub-path`), in three formats:
                        Clash, e.g. a VPS running the official sing-box image)
 
 Content is generated per request from:
-  - sub-front.yaml   : optional verbatim YAML fragment of front nodes (CF->CloudShell)
-  - front-domains.txt: optional, one "domain [display name]" per line — front nodes
-                       are generated from it when sub-front.yaml is absent
-  - cf-optimized.txt : optional, same line format, auto-refreshed periodically by
-                       cf-optimize-refresh.sh (see supervise.sh) — merged with
-                       front-domains.txt, deduped by domain (front-domains.txt wins)
+  - cf-domains.txt   : the ONLY front-domain source, written by
+                       cf-optimize-refresh.sh from the BestCF community list
+                       (cmliu/CF-Pages-BestCF cf_domains.txt). One
+                       "domain[:port] [display name]" per line. Hand-written
+                       sub-front.yaml / front-domains.txt are ignored.
   - kui local API    : live residential exit slots (state/egress/ISP), when the
                        residential layer (install-residential.sh) is installed
 
@@ -276,7 +275,7 @@ import http.server
 
 BASE = pathlib.Path(__file__).resolve().parent
 SUB_PATH_FILE = BASE / "sub-path"
-FRONT_FILE = BASE / "sub-front.yaml"
+CF_DOMAINS_FILE = BASE / "cf-domains.txt"
 KUI_API = "http://127.0.0.1:8090/api/local/exits"
 CACHE_TTL = 20  # seconds
 PORT = 38081
@@ -334,13 +333,13 @@ def res_domains() -> list[tuple[str, str]]:
     return [(cf_host(), "")]
 
 
-def _vless_node(name: str, domain: str, path: str) -> str:
+def _vless_node(name: str, domain: str, path: str, port: int = 443) -> str:
     host = cf_host()
     return "\n".join((
         f"  - name: {json.dumps(name, ensure_ascii=False)}",
         "    type: vless",
         f"    server: {domain}",
-        "    port: 443",
+        f"    port: {int(port)}",
         f"    uuid: {vless_uuid()}",
         "    network: ws",
         "    tls: true",
@@ -354,50 +353,54 @@ def _vless_node(name: str, domain: str, path: str) -> str:
     ))
 
 
-def _front_domain_entries() -> list[list[str]]:
-    """front-domains.txt entries, then cf-optimized.txt entries (auto-
-    refreshed, see cf-optimize-refresh.sh), deduped by domain — first match
-    wins so a hand-picked entry always beats the auto-fetched one."""
-    seen: set[str] = set()
-    out: list[list[str]] = []
-    for f in (BASE / "front-domains.txt", BASE / "cf-optimized.txt"):
-        if not f.exists():
+def _parse_cf_line(line: str):
+    """domain[:port][#tag| tag] -> (domain, port, tag). Tag defaults to the domain."""
+    raw = line.strip()
+    if not raw or raw.startswith("#"):
+        return None
+    tag = ""
+    if "#" in raw:
+        raw, tag = raw.split("#", 1)
+        raw, tag = raw.strip(), tag.strip()
+    elif " " in raw or "\t" in raw:
+        raw, tag = raw.split(None, 1)
+        raw, tag = raw.strip(), tag.strip()
+    port = 443
+    if ":" in raw:
+        host_part, port_part = raw.rsplit(":", 1)
+        if port_part.isdigit() and 1 <= int(port_part) <= 65535:
+            raw, port = host_part.strip(), int(port_part)
+    if not raw:
+        return None
+    return raw, port, (tag or raw)
+
+def _cf_entries():
+    """(domain, port, unique display name) from cf-domains.txt — the BestCF list."""
+    if not CF_DOMAINS_FILE.exists():
+        return []
+    out, seen, counts = [], set(), {}
+    for line in CF_DOMAINS_FILE.read_text(encoding="utf-8").splitlines():
+        parsed = _parse_cf_line(line)
+        if not parsed or parsed[0] in seen:
             continue
-        for p in _active_lines(f):
-            if p[0] in seen:
-                continue
-            seen.add(p[0])
-            out.append(p)
+        seen.add(parsed[0])
+        counts[parsed[2]] = counts.get(parsed[2], 0) + 1
+        name = parsed[2] if counts[parsed[2]] == 1 else "%s (%d)" % (parsed[2], counts[parsed[2]])
+        out.append((parsed[0], parsed[1], name))
     return out
 
+def _unique_front_pairs():
+    """(unique display name, domain) — port-443 entries only, for link/sb builders."""
+    return [(name, domain) for domain, port, name in _cf_entries() if port == 443]
 
-def _unique_front_pairs() -> list[tuple[str, str]]:
-    """(unique display name, domain) from front sources."""
-    entries = _front_domain_entries()
-    pairs: list[tuple[str, str]] = []
-    counts: dict[str, int] = {}
-    for p in entries:
-        raw_name = p[1] if len(p) > 1 else p[0]
-        cnt = counts.get(raw_name, 0) + 1
-        counts[raw_name] = cnt
-        name = raw_name if cnt == 1 else f"{raw_name} ({cnt})"
-        pairs.append((name, p[0]))
-    return pairs
-
-def front_block() -> tuple[str, list[str]]:
-    """Return (yaml fragment, node names) for the static CF front nodes."""
-    if FRONT_FILE.exists():
-        frag = FRONT_FILE.read_text(encoding="utf-8").rstrip()
-        names = [ln.split('"')[1] for ln in frag.splitlines()
-                 if ln.strip().startswith("- name:") and '"' in ln]
-        return frag, names
-    pairs = _unique_front_pairs()
-    if pairs:
-        nodes = [_vless_node(name, domain, "/vless") for name, domain in pairs]
-        names = [name for name, _ in pairs]
+def front_block():
+    """Return (yaml fragment, node names) for the BestCF front nodes."""
+    entries = _cf_entries()
+    if entries:
+        nodes = [_vless_node(name, domain, "/vless", port) for domain, port, name in entries]
+        names = [name for _, _, name in entries]
         return "\n".join(nodes), names
     return "", []
-
 
 def isp_short(raw) -> str:
     if isinstance(raw, dict):  # testisp shape: isp is an object
@@ -452,18 +455,7 @@ def res_node_yaml(slot: dict, domain: str, tag: str) -> str:
 
 
 def front_pairs() -> list[tuple[str, str]]:
-    """(display name, entry domain) for each front node, from sub-front.yaml
-    or front-domains.txt/cf-optimized.txt — same sources as front_block()."""
-    if FRONT_FILE.exists():
-        pairs, name = [], None
-        for ln in FRONT_FILE.read_text(encoding="utf-8").splitlines():
-            s = ln.strip()
-            if s.startswith("- name:") and '"' in s:
-                name = json.loads(s.split(":", 1)[1].strip())
-            elif s.startswith("server:") and name is not None:
-                pairs.append((name, s.split(":", 1)[1].strip()))
-                name = None
-        return pairs
+    """(display name, entry domain) for each port-443 BestCF front node."""
     return _unique_front_pairs()
 
 

@@ -11,8 +11,8 @@ KUI_DATA="$HOME/kui-data"
 SLOT_COUNT="${KUI_SLOT_COUNT:-24}"
 FIRST_SOCKS=7920
 LAST_SOCKS=$((FIRST_SOCKS + SLOT_COUNT - 1))
-CF_REFRESH_INTERVAL="${CF_REFRESH_INTERVAL:-172800}"  # 2 days; see cf-optimize-refresh.sh
-CF_REFRESH_STAMP="$CONFIG_DIR/.cf-optimized-last-refresh"
+CF_REFRESH_INTERVAL="${CF_REFRESH_INTERVAL:-43200}"  # 12h; see cf-optimize-refresh.sh
+CF_REFRESH_STAMP="$CONFIG_DIR/.cf-domains-last-refresh"
 
 # single instance: started from both the boot hook and ~/.bashrc
 exec 9>/tmp/supervise.lock
@@ -62,8 +62,8 @@ while true; do
      && ! pgrep -f "subserver.py" >/dev/null 2>&1; then
     setsid python3 "$CONFIG_DIR/subserver.py" > /tmp/subserver.log 2>&1 &
   fi
-  # CF-optimized front-domain list: refresh at most every CF_REFRESH_INTERVAL
-  # (writes cf-optimized.txt, merged into front nodes by subserver.py)
+  # BestCF front-domain list: refresh at most every CF_REFRESH_INTERVAL
+  # (writes cf-domains.txt, the only front source subserver.py reads)
   if [ -f "$CONFIG_DIR/cf-optimize-refresh.sh" ]; then
     now=$(date -u +%s)
     last=0
