@@ -1,6 +1,9 @@
 """CRUD for the user-maintained proxy pool, persisted at state/proxies.json."""
 import json
 import os
+import time
+import urllib.error
+import urllib.request
 import uuid
 
 import state_paths
@@ -50,3 +53,31 @@ def get_proxy_url(proxy_id: str) -> str | None:
         if p["id"] == proxy_id:
             return p["url"]
     return None
+
+
+def test_proxy_connectivity(url: str, timeout: float = 4.0) -> dict:
+    """Test if a proxy can connect to Google OAuth endpoint."""
+    t0 = time.time()
+    try:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"https": url, "http": url})
+        )
+        req = urllib.request.Request(
+            "https://oauth2.googleapis.com",
+            headers={"User-Agent": "cloudshell-web-admin/1.0"},
+        )
+        opener.open(req, timeout=timeout)
+        latency = int((time.time() - t0) * 1000)
+        return {"ok": True, "latency_ms": latency}
+    except urllib.error.HTTPError as e:
+        latency = int((time.time() - t0) * 1000)
+        return {"ok": True, "latency_ms": latency, "http_status": e.code}
+    except Exception as e:
+        latency = int((time.time() - t0) * 1000)
+        err_msg = str(e)
+        if "Connection refused" in err_msg or "111" in err_msg:
+            err_msg = "连接被拒绝 (端口可能未开放或节点离线)"
+        elif "timed out" in err_msg.lower():
+            err_msg = "连接超时"
+        return {"ok": False, "latency_ms": latency, "error": err_msg}
+

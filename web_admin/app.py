@@ -206,7 +206,7 @@ class Handler(BaseHTTPRequestHandler):
                     proxy_url,
                     on_success=_on_login_success,
                 )
-            except gcloud_accounts.InvalidAccountName as exc:
+            except (gcloud_accounts.InvalidAccountName, gcloud_accounts.InvalidProxyError) as exc:
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             self._send_json(HTTPStatus.OK, {"ok": True, "name": name})
@@ -248,6 +248,40 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
                 return
             self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/activate$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            try:
+                provision.start_activate(m.group(1))
+            except (gcloud_accounts.InvalidAccountName, provision.ProvisionError) as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        m = re.match(r"^/api/accounts/([a-zA-Z0-9_-]{1,50})/standby$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            try:
+                provision.start_standby(m.group(1))
+            except (gcloud_accounts.InvalidAccountName, provision.ProvisionError) as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+            return
+        m = re.match(r"^/api/proxies/([a-zA-Z0-9_-]{1,50})/test$", path)
+        if m:
+            if not (self._require_session() and self._require_same_origin()):
+                return
+            proxy_id = m.group(1)
+            proxy_url = proxy_pool.get_proxy_url(proxy_id)
+            if not proxy_url:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "proxy not found"})
+                return
+            res = proxy_pool.test_proxy_connectivity(proxy_url)
+            self._send_json(HTTPStatus.OK, res)
             return
         if path == "/api/proxies":
             if not (self._require_session() and self._require_same_origin()):

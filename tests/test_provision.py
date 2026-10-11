@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web_admin"))
 import provision  # noqa: E402
+import gcloud_accounts  # noqa: E402
 import state_paths  # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -118,6 +119,37 @@ class TestProvision(unittest.TestCase):
         res = provision.get_remote_check("acct-b")
         self.assertEqual(res.get("state"), "installed")
         self.assertTrue(res.get("cloudflared_running"))
+
+    def test_start_activate_and_standby(self):
+        # Initial state: acct-a is current
+        with open(state_paths.current_account_file(), "w", encoding="utf-8") as f:
+            f.write("acct-a\n")
+
+        # Activate acct-b
+        provision.start_activate("acct-b")
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            with provision._provision_lock:
+                t = provision._remote_check_threads.get("acct-b")
+                if t is None or not t.is_alive():
+                    break
+            time.sleep(0.05)
+
+        # Verify current account updated to acct-b
+        self.assertEqual(gcloud_accounts.current_account_name(), "acct-b")
+        self.assertTrue(provision.get_remote_check("acct-b").get("cloudflared_running"))
+
+        # Put acct-b on standby
+        provision.start_standby("acct-b")
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            with provision._provision_lock:
+                t = provision._remote_check_threads.get("acct-b")
+                if t is None or not t.is_alive():
+                    break
+            time.sleep(0.05)
+
+        self.assertFalse(provision.get_remote_check("acct-b").get("cloudflared_running"))
 
 
 if __name__ == "__main__":

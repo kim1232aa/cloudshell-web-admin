@@ -533,6 +533,7 @@ def cleanup_provision_data(account_name: str) -> None:
 # --- Remote deployment probing (read-only SSH inspection) ---
 
 _remote_check_threads: dict[str, threading.Thread] = {}
+_remote_check_operations: dict[str, str] = {}
 
 _REMOTE_CHECK_CMD = (
     'i=0; [ -f "$HOME/proxy-start.sh" ] && i=1; '
@@ -585,7 +586,7 @@ def get_remote_check(account_name: str) -> dict[str, Any]:
     with _provision_lock:
         t = _remote_check_threads.get(account_name)
         if t and t.is_alive():
-            data["state"] = "checking"
+            data["state"] = _remote_check_operations.get(account_name, "checking")
     return data
 
 
@@ -596,6 +597,7 @@ def start_remote_check(account_name: str) -> None:
         t = _remote_check_threads.get(account_name)
         if t and t.is_alive():
             return
+        _remote_check_operations[account_name] = "checking"
 
         def _worker():
             try:
@@ -624,7 +626,141 @@ def start_remote_check(account_name: str) -> None:
             finally:
                 with _provision_lock:
                     _remote_check_threads.pop(account_name, None)
+                    _remote_check_operations.pop(account_name, None)
 
         thread = threading.Thread(target=_worker, daemon=True)
         _remote_check_threads[account_name] = thread
         thread.start()
+
+
+def start_activate(account_name: str) -> None:
+    """Make account_name the active Cloud Shell tunnel origin. Demote previous active account to standby."""
+    gcloud_accounts.validate_name(account_name)
+    with _provision_lock:
+        t = _remote_check_threads.get(account_name)
+        if t and t.is_alive():
+            return
+        _remote_check_operations[account_name] = "activating"
+
+        def _worker():
+            try:
+                current_acc = gcloud_accounts.current_account_name()
+                # 1. Demote previous active account to standby if different
+                if current_acc and current_acc != account_name:
+                    try:
+                        _run_gcloud_ssh(
+                            current_acc,
+                            "pkill -f 'cloudflared' >/dev/null 2>&1 || true",
+                            timeout=60,
+                            check=False,
+                        )
+                        old_cf = state_paths.remote_check_file(current_acc)
+                        if os.path.exists(old_cf):
+                            try:
+                                with open(old_cf, "r", encoding="utf-8") as f:
+                                    old_chk = json.load(f)
+                                old_chk["cloudflared_running"] = False
+                                _write_remote_check(current_acc, old_chk)
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        logger.warning("Failed to demote old account %s: %s", current_acc, e)
+
+                # 2. Start proxy on target account
+                res = _run_gcloud_ssh(
+                    account_name,
+                    "bash ~/proxy-start.sh >/dev/null 2>&1; head -1 ~/proxy-link.txt 2>/dev/null",
+                    timeout=180,
+                    check=False,
+                )
+                link = ""
+                for line in (res.stdout or "").splitlines():
+                    line = line.strip()
+                    if line.startswith("vless://"):
+                        link = line
+                        break
+
+                # 3. Update current-account and proxy-link files
+                Path(state_paths.current_account_file()).write_text(account_name + "\n", encoding="utf-8")
+                if link:
+                    Path(state_paths.proxy_link_file()).write_text(link + "\n", encoding="utf-8")
+
+                # 4. Probe target account state
+                chk_res = _run_gcloud_ssh(account_name, _REMOTE_CHECK_CMD, timeout=60, check=False)
+                parsed = parse_remote_check_output(chk_res.stdout) if chk_res.returncode == 0 else None
+                if parsed:
+                    _write_remote_check(account_name, {
+                        "state": "installed" if parsed["installed"] else "not_installed",
+                        **parsed,
+                    })
+                else:
+                    _write_remote_check(account_name, {
+                        "state": "installed",
+                        "installed": True,
+                        "cloudflared_running": True,
+                        "supervise_running": True,
+                        "has_proxy_link": bool(link),
+                    })
+            except Exception as e:
+                logger.error("Failed to activate account %s: %s", account_name, e)
+                try:
+                    _write_remote_check(account_name, {"state": "unreachable", "error": str(e)[:300]})
+                except Exception:
+                    pass
+            finally:
+                with _provision_lock:
+                    _remote_check_threads.pop(account_name, None)
+                    _remote_check_operations.pop(account_name, None)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        _remote_check_threads[account_name] = thread
+        thread.start()
+
+
+def start_standby(account_name: str) -> None:
+    """Stop cloudflared on account_name to save quota and put it in standby."""
+    gcloud_accounts.validate_name(account_name)
+    with _provision_lock:
+        t = _remote_check_threads.get(account_name)
+        if t and t.is_alive():
+            return
+        _remote_check_operations[account_name] = "stopping"
+
+        def _worker():
+            try:
+                _run_gcloud_ssh(
+                    account_name,
+                    "pkill -f 'cloudflared' >/dev/null 2>&1 || true",
+                    timeout=60,
+                    check=False,
+                )
+                cf = state_paths.remote_check_file(account_name)
+                chk: dict[str, Any] = {"account": account_name, "state": "installed", "installed": True}
+                if os.path.exists(cf):
+                    try:
+                        with open(cf, "r", encoding="utf-8") as f:
+                            chk = json.load(f)
+                    except Exception:
+                        pass
+                chk["state"] = "installed"
+                chk["cloudflared_running"] = False
+                _write_remote_check(account_name, chk)
+
+                current_acc = gcloud_accounts.current_account_name()
+                if current_acc == account_name:
+                    try:
+                        os.remove(state_paths.current_account_file())
+                    except OSError:
+                        pass
+                    Path(state_paths.force_failover_flag()).touch()
+            except Exception as e:
+                logger.error("Failed to stop account %s: %s", account_name, e)
+            finally:
+                with _provision_lock:
+                    _remote_check_threads.pop(account_name, None)
+                    _remote_check_operations.pop(account_name, None)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        _remote_check_threads[account_name] = thread
+        thread.start()
+

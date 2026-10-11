@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web_admin"))
 import gcloud_accounts  # noqa: E402
@@ -157,10 +158,16 @@ class TestLoginSession(unittest.TestCase):
             gcloud_accounts.login_output("never-started")
 
     def test_proxy_url_persisted_when_provided(self):
-        gcloud_accounts.start_login("acct-proxied", "socks5://1.2.3.4:1080")
+        with unittest.mock.patch("proxy_pool.test_proxy_connectivity", return_value={"ok": True}):
+            gcloud_accounts.start_login("acct-proxied", "socks5://1.2.3.4:1080")
         self.assertEqual(
             gcloud_accounts.read_account_proxy_url("acct-proxied"), "socks5://1.2.3.4:1080"
         )
+
+    def test_start_login_fails_fast_on_dead_proxy(self):
+        with unittest.mock.patch("proxy_pool.test_proxy_connectivity", return_value={"ok": False, "error": "Connection refused"}):
+            with self.assertRaises(gcloud_accounts.InvalidProxyError):
+                gcloud_accounts.start_login("acct-dead-proxy", "socks5://1.2.3.4:1080")
 
     def test_delete_account_clears_proxy_binding(self):
         gcloud_accounts.write_account_proxy_url("acct-a", "socks5://1.2.3.4:1080")

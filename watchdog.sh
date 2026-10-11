@@ -132,11 +132,19 @@ failover() {
     account_ok "$cfg" || { log "$cfg: skip (auth invalid — run: docker compose run --rm watchdog auth $cfg)"; continue; }
     log "$cfg: triggering Cloud Shell rebuild..."
     if link=$(rebuild_on "$cfg"); then
+      if [ -n "$cur_name" ] && [ "$cur_name" != "$cfg" ]; then
+        log "Demoting old account $cur_name to standby..."
+        env $(account_proxy_env "$cur_name") CLOUDSDK_ACTIVE_CONFIG_NAME="$cur_name" timeout 60 gcloud cloud-shell ssh \
+          --ssh-flag="-o BatchMode=yes" --quiet \
+          --command="pkill -f 'cloudflared' >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+        python3 -c "import json, os; p='$STATE_DIR/remote-check-$cur_name.json'; os.path.exists(p) and json.dump(dict(json.load(open(p)), cloudflared_running=False), open(p, 'w'))" >/dev/null 2>&1 || true
+      fi
       echo "$cfg" > "$CUR_FILE"
       echo "$link" > "$LINK_FILE"
       date -u +%s > "$LAST_TICKLE"
       log "$cfg: UP -> $link"
       echo "$(ts) UP account=$cfg" > "$STATUS_FILE"
+      python3 -c "import json, os; p='$STATE_DIR/remote-check-$cfg.json'; os.path.exists(p) and json.dump(dict(json.load(open(p)), cloudflared_running=True), open(p, 'w'))" >/dev/null 2>&1 || true
       return 0
     fi
   done

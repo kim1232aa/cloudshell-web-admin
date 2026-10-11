@@ -47,6 +47,10 @@ function renderProvisionCell(a) {
     badge = '<span style="color:#007bff; font-weight:bold;">部署中...</span>';
   } else if (rState === 'checking') {
     badge = '<span style="color:#007bff;">检测中...</span>';
+  } else if (rState === 'activating') {
+    badge = '<span style="color:#007bff; font-weight:bold;">切换中...</span>';
+  } else if (rState === 'stopping') {
+    badge = '<span style="color:#ffc107; font-weight:bold;">停止中...</span>';
   } else if (rState === 'installed') {
     const run = r.cloudflared_running
       ? '<span style="color:#28a745;">运行中</span>'
@@ -124,19 +128,66 @@ async function loadAccounts() {
     ).join('');
 
     const provHtml = renderProvisionCell(a);
-    if (a.provision && a.provision.state === 'running') {
+    const rState = (a.remote || {}).state || 'never';
+    const rRun = (a.remote || {}).cloudflared_running;
+    const pState = (a.provision || {}).state || 'not_provisioned';
+
+    if (pState === 'running') {
       hasRunningProvision = true;
     }
-    if (a.remote && a.remote.state === 'checking') {
+    if (rState === 'checking' || rState === 'activating' || rState === 'stopping') {
       hasChecking = true;
     }
 
+    let actionsHtml = '';
+    if (!a.is_current && (rState === 'installed' || pState === 'ok')) {
+      actionsHtml += `<button data-name="${a.name}" class="activate-account" style="margin-right:4px;">设为当前</button>`;
+    }
+    if (rState === 'installed' && rRun) {
+      actionsHtml += `<button data-name="${a.name}" class="standby-account" style="margin-right:4px;">设为待机</button>`;
+    }
+    actionsHtml += `<button data-name="${a.name}" class="delete-account">删除</button>`;
+
+    const currentMark = a.is_current
+      ? '<span style="color:#28a745; font-weight:bold;">✓ 当前</span>'
+      : '-';
+
     tr.innerHTML = `<td>${a.name}</td><td>${a.email || ''}</td><td>${a.status}</td>` +
       `<td><select class="account-proxy-select" data-name="${a.name}">${options}</select></td>` +
-      `<td>${a.is_current ? '✓' : ''}</td>` +
+      `<td>${currentMark}</td>` +
       `<td>${provHtml}</td>` +
-      `<td><button data-name="${a.name}" class="delete-account">删除</button></td>`;
+      `<td>${actionsHtml}</td>`;
     tbody.appendChild(tr);
+  }
+
+  // Bind activate buttons
+  for (const btn of document.querySelectorAll('.activate-account')) {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`确定将账号 ${name} 切换为当前运行主机？\n旧主机将自动转为待机（停止 cloudflared），确保单机独占。`)) return;
+      try {
+        await api('POST', `/api/accounts/${name}/activate`);
+        loadAccounts();
+        loadStatus();
+      } catch (err) {
+        alert(`切换主机失败: ${err.message}`);
+      }
+    });
+  }
+
+  // Bind standby buttons
+  for (const btn of document.querySelectorAll('.standby-account')) {
+    btn.addEventListener('click', async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`确定将账号 ${name} 设为待机？\n这会停止其 cloudflared 进程以节省 Cloud Shell 周配额。`)) return;
+      try {
+        await api('POST', `/api/accounts/${name}/standby`);
+        loadAccounts();
+        loadStatus();
+      } catch (err) {
+        alert(`设为待机失败: ${err.message}`);
+      }
+    });
   }
 
   // Bind check-all button
@@ -230,15 +281,34 @@ async function loadProxies() {
   const tbody = document.querySelector('#proxies-table tbody');
   tbody.innerHTML = '';
   const select = document.getElementById('new-account-proxy');
-  select.innerHTML = '<option value="">直连</option>';
+  select.innerHTML = '<option value="">直连 (推荐 / 本机网络)</option>';
   for (const p of data.proxies) {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${p.label}</td><td>${maskUrl(p.url)}</td>` +
-      `<td><button data-id="${p.id}" class="delete-proxy">删除</button></td>`;
+      `<td><button data-id="${p.id}" class="test-proxy">测试</button> ` +
+      `<button data-id="${p.id}" class="delete-proxy">删除</button> ` +
+      `<span id="proxy-test-${p.id}" style="margin-left:6px; font-size:12px;"></span></td>`;
     tbody.appendChild(tr);
     const opt = document.createElement('option');
     opt.value = p.id; opt.textContent = p.label;
     select.appendChild(opt);
+  }
+  for (const btn of document.querySelectorAll('.test-proxy')) {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const statusSpan = document.getElementById(`proxy-test-${id}`);
+      if (statusSpan) statusSpan.innerHTML = '<span style="color:#007bff;">测试中...</span>';
+      try {
+        const res = await api('POST', `/api/proxies/${id}/test`);
+        if (res.ok) {
+          statusSpan.innerHTML = `<span style="color:#28a745;">✓ 可用 (${res.latency_ms}ms)</span>`;
+        } else {
+          statusSpan.innerHTML = `<span style="color:#dc3545;" title="${(res.error || '').replace(/"/g, '&quot;')}">✗ 失败: ${res.error || '无法连接'}</span>`;
+        }
+      } catch (err) {
+        if (statusSpan) statusSpan.innerHTML = `<span style="color:#dc3545;">✗ 请求出错: ${err.message}</span>`;
+      }
+    });
   }
   for (const btn of document.querySelectorAll('.delete-proxy')) {
     btn.addEventListener('click', async () => {
@@ -288,11 +358,23 @@ document.getElementById('add-proxy-form').addEventListener('submit', async (e) =
   }
 });
 
+function showLoginError(msg) {
+  const banner = document.getElementById('login-error-banner');
+  if (banner) {
+    banner.textContent = msg;
+    banner.style.display = 'block';
+  } else {
+    alert(msg);
+  }
+}
+
 const dialog = document.getElementById('add-account-dialog');
 document.getElementById('add-account-btn').addEventListener('click', () => {
   document.getElementById('login-output').textContent = '';
   document.getElementById('login-helper').style.display = 'none';
   document.getElementById('login-code-form').style.display = 'none';
+  const banner = document.getElementById('login-error-banner');
+  if (banner) banner.style.display = 'none';
   document.getElementById('add-account-form').style.display = 'block';
   dialog.showModal();
 });
@@ -302,13 +384,15 @@ let pollTimer = null;
 let currentLoginAccountName = null;
 document.getElementById('add-account-form').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const banner = document.getElementById('login-error-banner');
+  if (banner) banner.style.display = 'none';
   const rawName = document.getElementById('new-account-name').value;
   const proxy_id = document.getElementById('new-account-proxy').value || null;
   let res;
   try {
     res = await api('POST', '/api/accounts', {name: rawName, proxy_id});
   } catch (err) {
-    alert(`发起登录失败: ${err.message}`);
+    showLoginError(`发起登录失败: ${err.message}`);
     return;
   }
   const name = res.name || rawName;
@@ -341,7 +425,17 @@ document.getElementById('add-account-form').addEventListener('submit', async (e)
           loadAccounts();
           showProvisionLog(name);
         } else {
-          alert('登录失败，请查看输出信息。');
+          let errMsg = '登录失败。';
+          const lines = (outputText || '').trim().split('\n');
+          const lastErrLines = lines.slice(-6).join('\n');
+          if (lastErrLines.includes('SOCKS server failure') || lastErrLines.includes('Connection refused')) {
+            errMsg = '登录失败：所选代理连接失败 (SOCKS error)，请尝试更换代理或选择“直连 (推荐/无代理)”。\n\n终端输出:\n' + lastErrLines;
+          } else if (lastErrLines.includes('invalid_grant')) {
+            errMsg = '登录失败：验证码无效或已过期，请重新发起登录授权。';
+          } else {
+            errMsg = '登录失败，请查看输出：\n' + lastErrLines;
+          }
+          showLoginError(errMsg);
         }
       }
     } catch (e) {

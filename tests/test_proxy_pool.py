@@ -3,6 +3,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "web_admin"))
 import proxy_pool  # noqa: E402
@@ -61,6 +62,23 @@ class TestProxyPool(unittest.TestCase):
 
     def test_get_proxy_url_missing(self):
         self.assertIsNone(proxy_pool.get_proxy_url("nope"))
+
+    def test_test_proxy_connectivity_success(self):
+        with unittest.mock.patch("urllib.request.build_opener") as mock_opener:
+            mock_inst = unittest.mock.MagicMock()
+            mock_opener.return_value = mock_inst
+            res = proxy_pool.test_proxy_connectivity("socks5://1.2.3.4:1080")
+            self.assertTrue(res["ok"])
+            self.assertIn("latency_ms", res)
+
+    def test_test_proxy_connectivity_failure(self):
+        with unittest.mock.patch("urllib.request.build_opener") as mock_opener:
+            mock_inst = unittest.mock.MagicMock()
+            mock_inst.open.side_effect = ConnectionRefusedError("[Errno 111] Connection refused")
+            mock_opener.return_value = mock_inst
+            res = proxy_pool.test_proxy_connectivity("socks5://1.2.3.4:1080")
+            self.assertFalse(res["ok"])
+            self.assertIn("连接被拒绝", res["error"])
 
 
 if __name__ == "__main__":

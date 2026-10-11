@@ -43,7 +43,7 @@
   <section id="proxies-section">
     <h2>代理池</h2>
     <table id="proxies-table">
-      <thead><tr><th>标签</th><th>URL</th><th></th></tr></thead>
+      <thead><tr><th>标签</th><th>URL</th><th>操作</th></tr></thead>
       <tbody></tbody>
     </table>
     <form id="add-proxy-form">
@@ -59,9 +59,10 @@
   </section>
 
   <dialog id="add-account-dialog">
+    <div id="login-error-banner" style="display:none; margin:10px 0; padding:10px; background:#fff2f0; border:1px solid #ffccc7; color:#cf1322; border-radius:4px; font-size:13px; white-space:pre-wrap;"></div>
     <form id="add-account-form">
       <label>配置名称或邮箱 <input id="new-account-name" placeholder="如 acct-e 或 user@gmail.com" required></label>
-      <label>代理 <select id="new-account-proxy"><option value="">直连</option></select></label>
+      <label>代理 <select id="new-account-proxy"><option value="">直连 (推荐 / 本机网络)</option></select></label>
       <button type="submit">开始登录</button>
       <button type="button" id="cancel-add-account">取消</button>
     </form>

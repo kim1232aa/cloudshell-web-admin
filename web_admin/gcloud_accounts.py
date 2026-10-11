@@ -29,6 +29,10 @@ class InvalidAccountName(ValueError):
     pass
 
 
+class InvalidProxyError(ValueError):
+    pass
+
+
 class AccountError(RuntimeError):
     pass
 
@@ -230,8 +234,15 @@ def start_login(
     name: str,
     proxy_url: str | None,
     on_success: Callable[[str], None] | None = None,
+    check_proxy: bool = True,
 ) -> None:
     validate_name(name)
+    if proxy_url and check_proxy:
+        import proxy_pool
+        probe = proxy_pool.test_proxy_connectivity(proxy_url, timeout=3.0)
+        if not probe.get("ok"):
+            err = probe.get("error", "连接失败")
+            raise InvalidProxyError(f"所选代理无法连接到 Google ({err})，请更换代理或选择直连")
     _ensure_config_exists(name)
     if proxy_url:
         write_account_proxy_url(name, proxy_url)
