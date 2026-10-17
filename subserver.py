@@ -81,10 +81,25 @@ def _active_lines(f: pathlib.Path) -> list[list[str]]:
     return out
 
 
-# Residential entry domain: only the FIRST entry of res-domains.txt is used —
-# one slot = one node, no manual-select fallback variants (they doubled the
-# node count). Override via res-domains.txt next to this script:
-# one "domain [tag]" per line. Default: the tunnel hostname itself.
+def _cf_domain_for_slot(slot_id: str) -> tuple[str, int]:
+    """Deterministically pick a (domain, port) from cf-domains.txt per slot."""
+    entries = _cf_entries()
+    if entries:
+        num = slot_id.split("-", 1)[-1] if "-" in slot_id else slot_id
+        if num.isdigit():
+            idx = (int(num) - 1) % len(entries)
+        else:
+            import zlib
+            idx = zlib.crc32(slot_id.encode()) % len(entries)
+        return entries[idx][0], entries[idx][1]
+    f = BASE / "res-domains.txt"
+    if f.exists():
+        out = _active_lines(f)
+        if out:
+            return out[0][0], 443
+    return cf_host(), 443
+
+
 def res_domains() -> list[tuple[str, str]]:
     f = BASE / "res-domains.txt"
     if f.exists():
@@ -106,7 +121,7 @@ def _vless_node(name: str, domain: str, path: str, port: int = 443) -> str:
         "    tls: true",
         f"    servername: {host}",
         "    client-fingerprint: chrome",
-        "    udp: false",
+        "    udp: true",
         "    ws-opts:",
         f"      path: {path}",
         "      headers:",
@@ -210,9 +225,10 @@ def res_node_name(slot: dict, tag: str) -> str:
     return name
 
 
-def res_node_yaml(slot: dict, domain: str, tag: str) -> str:
+def res_node_yaml(slot: dict) -> str:
     num = slot["id"].split("-", 1)[1]
-    return _vless_node(res_node_name(slot, tag), domain, f"/res-{num}")
+    domain, port = _cf_domain_for_slot(slot["id"])
+    return _vless_node(res_node_name(slot, ""), domain, f"/res-{num}", port)
 
 
 def front_pairs() -> list[tuple[str, str]]:
@@ -242,8 +258,8 @@ def build_links() -> str:
     links = [_vless_link(n, d, "/vless") for n, d in front_pairs()]
     for slot in _live_exits() or []:
         num = slot["id"].split("-", 1)[1]
-        for domain, tag in res_domains():
-            links.append(_vless_link(res_node_name(slot, tag), domain, f"/res-{num}"))
+        domain, _ = _cf_domain_for_slot(slot["id"])
+        links.append(_vless_link(res_node_name(slot, ""), domain, f"/res-{num}"))
     return base64.b64encode("\n".join(links).encode()).decode() + "\n"
 
 
@@ -273,8 +289,8 @@ def build_sb() -> str:
     nodes = [vless_out(n, d, "/vless") for n, d in front_pairs()]
     for slot in _live_exits() or []:
         num = slot["id"].split("-", 1)[1]
-        for domain, tag in res_domains():
-            nodes.append(vless_out(res_node_name(slot, tag), domain, f"/res-{num}"))
+        domain, _ = _cf_domain_for_slot(slot["id"])
+        nodes.append(vless_out(res_node_name(slot, ""), domain, f"/res-{num}"))
     tags = [o["tag"] for o in nodes]
     cfg = {
         "log": {"level": "warn", "timestamp": True},
@@ -296,7 +312,6 @@ def build_sb() -> str:
 
 def build_yaml() -> str:
     front, front_names = front_block()
-    domains = res_domains()
 
     res_names, res_blocks = [], []
     pure_names = []  # verified residential only (feeds the url-test group)
@@ -311,13 +326,12 @@ def build_yaml() -> str:
             is_resi = slot["check_result"]["residential"].get("egress_type") == "residential"
         except Exception:
             is_resi = False
-        for domain, tag in domains:  # exactly one entry (see res_domains)
-            block = res_node_yaml(slot, domain, tag)
-            name = block.split('"')[1]
-            res_names.append(name)
-            res_blocks.append(block)
-            if is_resi:
-                pure_names.append(name)
+        block = res_node_yaml(slot)
+        name = block.split('"')[1]
+        res_names.append(name)
+        res_blocks.append(block)
+        if is_resi:
+            pure_names.append(name)
 
     now = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     lines = [
@@ -351,7 +365,7 @@ def build_yaml() -> str:
     else:
         g.append('  - name: "🏠 住宅自动"\n    type: select\n    proxies:\n      - "🚀 节点选择"')
     for grp in ('🧠 Claude', '🤖 ChatGPT', '🔵 Google·Gemini'):
-        g.append(f'  - name: "{grp}"\n    type: select\n    proxies:\n' + lst(["🏠 住宅自动", "🚀 节点选择", "⚡ 自动选择", "DIRECT"]))
+        g.append(f'  - name: "{grp}"\n    type: select\n    proxies:\n' + lst(["⚡ 自动选择", "🏠 住宅自动", "🚀 节点选择", "DIRECT"]))
     g.append('  - name: "🌐 其他流量"\n    type: select\n    proxies:\n' + lst(["🚀 节点选择", "⚡ 自动选择", "🏠 住宅自动", "DIRECT"]))
     g.append('  - name: "🇨🇳 中国流量"\n    type: select\n    proxies:\n' + lst(["DIRECT", "🚀 节点选择"]))
 
