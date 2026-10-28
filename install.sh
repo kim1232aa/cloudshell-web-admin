@@ -283,6 +283,57 @@ PORT = 38081
 _cache = {"at": 0.0, "yaml": ""}
 _kui_cache = {"at": 0.0, "exits": None}
 
+_CLAUDE_RULES: tuple[str, ...] = (
+    "DOMAIN-SUFFIX,anthropic.com",
+    "DOMAIN-SUFFIX,claude.ai",
+    "DOMAIN-SUFFIX,claude.com",
+    "DOMAIN-SUFFIX,clau.de",
+    "DOMAIN-SUFFIX,claudemcpclient.com",
+    "DOMAIN-SUFFIX,claudeusercontent.com",
+    "DOMAIN-SUFFIX,modelcontextprotocol.io",
+    "DOMAIN,anthropic.com.cdn.cloudflare.net",
+    "DOMAIN,servd-anthropic-website.b-cdn.net",
+    "DOMAIN,anthropic.auth0.com",
+    "DOMAIN-KEYWORD,claude",
+    "DOMAIN-KEYWORD,anthropic",
+)
+
+_CHATGPT_RULES: tuple[str, ...] = (
+    "DOMAIN-SUFFIX,chatgpt.com",
+    "DOMAIN-SUFFIX,openai.com",
+    "DOMAIN-SUFFIX,oaistatic.com",
+    "DOMAIN-SUFFIX,oaiusercontent.com",
+    "DOMAIN-SUFFIX,chat.com",
+    "DOMAIN-SUFFIX,sora.com",
+    "DOMAIN-SUFFIX,openai-api.arkoselabs.io",
+    "DOMAIN-KEYWORD,openai",
+    "DOMAIN-KEYWORD,chatgpt",
+)
+
+_GEMINI_RULES: tuple[str, ...] = (
+    "DOMAIN-SUFFIX,aistudio.google.com",
+    "DOMAIN-SUFFIX,makersuite.google.com",
+    "DOMAIN-SUFFIX,generativelanguage.googleapis.com",
+    "DOMAIN-SUFFIX,cloudcode-pa.googleapis.com",
+    "DOMAIN-SUFFIX,ai.google.dev",
+    "DOMAIN-SUFFIX,antigravity.google",
+    "DOMAIN-SUFFIX,gemini.google.com",
+    "DOMAIN-SUFFIX,vertexai.googleapis.com",
+    "DOMAIN-SUFFIX,aiplatform.googleapis.com",
+    "DOMAIN-SUFFIX,googleapis.com",
+)
+
+_LOCAL_DIRECT_RULES: tuple[str, ...] = (
+    "DOMAIN-SUFFIX,local,DIRECT",
+    "IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+    "IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
+    "IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
+    "IP-CIDR,100.64.0.0/10,DIRECT,no-resolve",
+    "IP-CIDR,198.18.0.0/15,DIRECT,no-resolve",
+    "GEOIP,LAN,DIRECT,no-resolve",
+)
+
 ISP_SHORT = {
     "sony network communications": "SonyNURO",
     "so-net": "So-net",
@@ -609,14 +660,17 @@ def build_yaml() -> str:
     g.append('  - name: "🇨🇳 中国流量"\n    type: select\n    proxies:\n' + lst(["DIRECT", "🚀 节点选择"]))
 
     r = ["rules:"]
-    for d in ("claude.ai", "claudeusercontent.com", "anthropic.com", "claude.com"):
-        r.append(f"  - DOMAIN-SUFFIX,{d},🧠 Claude")
-    for d in ("chatgpt.com", "openai.com", "oaistatic.com", "oaiusercontent.com", "chat.com", "openai-api.arkoselabs.io"):
-        r.append(f"  - DOMAIN-SUFFIX,{d},🤖 ChatGPT")
-    for d in ("gemini.google.com", "generativelanguage.googleapis.com", "bard.google.com", "deepmind.google", "aistudio.google.com"):
-        r.append(f"  - DOMAIN-SUFFIX,{d},🔵 Google·Gemini")
-    r.append("  - GEOIP,CN,🇨🇳 中国流量,no-resolve")
-    r.append("  - MATCH,🌐 其他流量")
+    r.extend(f"  - {rule},🤖 ChatGPT" for rule in _CHATGPT_RULES)
+    r.extend(f"  - {rule},🧠 Claude" for rule in _CLAUDE_RULES)
+    r.extend(f"  - {rule},🔵 Google·Gemini" for rule in _GEMINI_RULES)
+    r.extend(f"  - {rule}" for rule in _LOCAL_DIRECT_RULES)
+    r.extend((
+        "  - DOMAIN-SUFFIX,cn,🇨🇳 中国流量",
+        "  - GEOSITE,cn,🇨🇳 中国流量",
+        "  - GEOSITE,CN,🇨🇳 中国流量",
+        "  - GEOIP,CN,🇨🇳 中国流量",
+        "  - MATCH,🌐 其他流量",
+    ))
 
     return "\n".join(lines + g + r) + "\n"
 
@@ -625,13 +679,22 @@ def build_front_only() -> str:
     front, front_names = front_block()
     items = "\n".join(f"      - {json.dumps(n, ensure_ascii=False)}" for n in front_names)
     proxies = ("proxies:\n" + front + "\n") if front else "proxies: []\n"
+    r = ["rules:"]
+    r.extend(f"  - {rule}" for rule in _LOCAL_DIRECT_RULES)
+    r.extend((
+        "  - DOMAIN-SUFFIX,cn,DIRECT",
+        "  - GEOSITE,cn,DIRECT",
+        "  - GEOSITE,CN,DIRECT",
+        "  - GEOIP,CN,DIRECT",
+        "  - MATCH,🚀 节点选择",
+    ))
     return (
         "# Cloud Shell proxy subscription — FRONT-ONLY FALLBACK (kui unavailable)\n"
         "mixed-port: 7890\nallow-lan: false\nmode: rule\nlog-level: warning\n"
         + proxies +
         "proxy-groups:\n"
         '  - name: "🚀 节点选择"\n    type: select\n    proxies:\n' + (items or "      - DIRECT") + "\n"
-        "rules:\n  - GEOIP,CN,DIRECT,no-resolve\n  - MATCH,🚀 节点选择\n"
+        + "\n".join(r) + "\n"
     )
 
 
