@@ -151,6 +151,25 @@ class TestProvision(unittest.TestCase):
 
         self.assertFalse(provision.get_remote_check("acct-b").get("cloudflared_running"))
 
+    def test_subserver_domain_handling(self):
+        import importlib.util, pathlib
+        spec = importlib.util.spec_from_file_location(
+            "subserver",
+            pathlib.Path(__file__).resolve().parent.parent / "subserver.py"
+        )
+        sub = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sub)
+
+        # Test dead domains filtered
+        self.assertIn("fn.130519.xyz", sub.DEAD_DOMAINS)
+        self.assertIn("cf.3666888.xyz", sub.DEAD_DOMAINS)
+
+        entries = sub._cf_entries()
+        self.assertTrue(len(entries) > 0)
+        domain_names = {e[0] for e in entries}
+        self.assertNotIn("fn.130519.xyz", domain_names)
+        self.assertNotIn("cf.3666888.xyz", domain_names)
+
 
 if __name__ == "__main__":
     unittest.main()

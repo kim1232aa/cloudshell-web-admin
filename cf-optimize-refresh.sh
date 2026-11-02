@@ -13,13 +13,25 @@
 set -u
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="$BIN/cf-domains.txt"
+BACKUP="$BIN/front-domains.txt"
 SRC="${CF_DOMAINS_URL:-https://raw.githubusercontent.com/cmliu/CF-Pages-BestCF/main/cf_domains.txt}"
-LIMIT="${CF_DOMAINS_LIMIT:-40}"
+LIMIT="${CF_DOMAINS_LIMIT:-73}"
 
-body=$(curl -fsS -m 20 "$SRC" 2>/dev/null) || { echo "fetch failed, keeping $OUT" >&2; exit 1; }
+body=$(curl -fsS -m 20 "$SRC" 2>/dev/null) || body=""
+
+if [ -z "$body" ] && [ -f "$BACKUP" ]; then
+  body=$(cat "$BACKUP")
+fi
+
+if [ -z "$body" ]; then
+  echo "fetch failed and no backup found, keeping $OUT" >&2
+  exit 1
+fi
+
 printf '%s\n' "$body" | awk -v lim="$LIMIT" '
   BEGIN { n = 0 }
   /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+  /fn\.130519\.xyz/ || /cf\.3666888\.xyz/ { next }
   {
     split($1, a, "#")
     d = a[1]

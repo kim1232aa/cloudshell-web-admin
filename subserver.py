@@ -37,6 +37,8 @@ import http.server
 BASE = pathlib.Path(__file__).resolve().parent
 SUB_PATH_FILE = BASE / "sub-path"
 CF_DOMAINS_FILE = BASE / "cf-domains.txt"
+FRONT_DOMAINS_FILE = BASE / "front-domains.txt"
+DEAD_DOMAINS = frozenset({"fn.130519.xyz", "cf.3666888.xyz"})
 KUI_API = "http://127.0.0.1:8090/api/local/exits"
 CACHE_TTL = 20  # seconds
 PORT = 38081
@@ -132,9 +134,10 @@ def _active_lines(f: pathlib.Path) -> list[list[str]]:
     return out
 
 
-def _cf_domain_for_slot(slot_id: str) -> tuple[str, int]:
+def _cf_domain_for_slot(slot_id: str, entries: list[tuple[str, int, str]] | None = None) -> tuple[str, int]:
     """Deterministically pick a (domain, port) from cf-domains.txt per slot."""
-    entries = _cf_entries()
+    if entries is None:
+        entries = _cf_entries()
     if entries:
         num = slot_id.split("-", 1)[-1] if "-" in slot_id else slot_id
         if num.isdigit():
@@ -202,13 +205,18 @@ def _parse_cf_line(line: str):
     return raw, port, (tag or raw)
 
 def _cf_entries():
-    """(domain, port, unique display name) from cf-domains.txt — the BestCF list."""
-    if not CF_DOMAINS_FILE.exists():
+    """(domain, port, unique display name) from cf-domains.txt, falling back to front-domains.txt."""
+    src = None
+    if CF_DOMAINS_FILE.exists() and CF_DOMAINS_FILE.stat().st_size > 0:
+        src = CF_DOMAINS_FILE
+    elif FRONT_DOMAINS_FILE.exists() and FRONT_DOMAINS_FILE.stat().st_size > 0:
+        src = FRONT_DOMAINS_FILE
+    if not src:
         return []
     out, seen, counts = [], set(), {}
-    for line in CF_DOMAINS_FILE.read_text(encoding="utf-8").splitlines():
+    for line in src.read_text(encoding="utf-8").splitlines():
         parsed = _parse_cf_line(line)
-        if not parsed or parsed[0] in seen:
+        if not parsed or parsed[0] in seen or parsed[0] in DEAD_DOMAINS:
             continue
         seen.add(parsed[0])
         counts[parsed[2]] = counts.get(parsed[2], 0) + 1
@@ -276,9 +284,9 @@ def res_node_name(slot: dict, tag: str) -> str:
     return name
 
 
-def res_node_yaml(slot: dict) -> str:
+def res_node_yaml(slot: dict, entries: list[tuple[str, int, str]] | None = None) -> str:
     num = slot["id"].split("-", 1)[1]
-    domain, port = _cf_domain_for_slot(slot["id"])
+    domain, port = _cf_domain_for_slot(slot["id"], entries=entries)
     return _vless_node(res_node_name(slot, ""), domain, f"/res-{num}", port)
 
 
@@ -306,10 +314,13 @@ def _vless_link(name: str, domain: str, path: str) -> str:
 def build_links() -> str:
     """Standard v2ray base64 subscription (one vless:// link per line) — same
     nodes as the Clash YAML, for clients that only eat link lists."""
+    shuffled = list(_cf_entries())
+    import random
+    random.shuffle(shuffled)
     links = [_vless_link(n, d, "/vless") for n, d in front_pairs()]
     for slot in _live_exits() or []:
         num = slot["id"].split("-", 1)[1]
-        domain, _ = _cf_domain_for_slot(slot["id"])
+        domain, _ = _cf_domain_for_slot(slot["id"], entries=shuffled)
         links.append(_vless_link(res_node_name(slot, ""), domain, f"/res-{num}"))
     return base64.b64encode("\n".join(links).encode()).decode() + "\n"
 
@@ -337,10 +348,13 @@ def build_sb() -> str:
             "transport": {"type": "ws", "path": path, "headers": {"Host": host}},
         }
 
+    shuffled = list(_cf_entries())
+    import random
+    random.shuffle(shuffled)
     nodes = [vless_out(n, d, "/vless") for n, d in front_pairs()]
     for slot in _live_exits() or []:
         num = slot["id"].split("-", 1)[1]
-        domain, _ = _cf_domain_for_slot(slot["id"])
+        domain, _ = _cf_domain_for_slot(slot["id"], entries=shuffled)
         nodes.append(vless_out(res_node_name(slot, ""), domain, f"/res-{num}"))
     tags = [o["tag"] for o in nodes]
     cfg = {
@@ -372,12 +386,15 @@ def build_yaml() -> str:
         exits = None
     if exits is None and _cache["yaml"]:
         return _cache["yaml"]  # kui down: serve last good
+    shuffled_entries = list(_cf_entries())
+    import random
+    random.shuffle(shuffled_entries)
     for slot in exits or []:
         try:
             is_resi = slot["check_result"]["residential"].get("egress_type") == "residential"
         except Exception:
             is_resi = False
-        block = res_node_yaml(slot)
+        block = res_node_yaml(slot, entries=shuffled_entries)
         name = block.split('"')[1]
         res_names.append(name)
         res_blocks.append(block)
