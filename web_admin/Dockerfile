@@ -1,6 +1,8 @@
 FROM google/cloud-sdk:slim
 
-RUN pip install --no-cache-dir --break-system-packages pysocks==1.7.1
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --break-system-packages pysocks==1.7.1
 
 WORKDIR /app
 COPY web_admin/*.py ./
