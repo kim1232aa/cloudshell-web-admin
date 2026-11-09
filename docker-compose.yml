@@ -4,10 +4,6 @@ services:
     image: cloudshell-proxy-watchdog
     container_name: gcs-watchdog
     restart: unless-stopped
-    # host networking: the probe then behaves exactly like the host (avoids
-    # docker-bridge subnet collisions with WSL gateways and flaky NAT paths).
-    # The container exposes no ports, so this is safe.
-    network_mode: host
     environment:
       TUNNEL_HOST: ${TUNNEL_HOST:?create .env with TUNNEL_HOST=gcs.example.com}
       INTERVAL: ${INTERVAL:-60}

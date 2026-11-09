@@ -84,21 +84,39 @@ probe() {
 
 list_configs() { gcloud config configurations list --format='value(name)' 2>/dev/null; }
 
-account_proxy_env() { # $1=config name; prints "https_proxy=<url> http_proxy=<url>" or empty
-  local f="$STATE_DIR/proxy-$1" p
-  [ -f "$f" ] || return 0
-  p=$(cat "$f")
-  [ -n "$p" ] && printf 'https_proxy=%s http_proxy=%s' "$p" "$p"
+run_with_account() { # $1=config name; rest=command
+  local cfg="$1"
+  shift
+  local f="$STATE_DIR/proxy-$cfg" purl=""
+  if [ -f "$f" ]; then
+    purl=$(cat "$f")
+    case "$purl" in
+      http://*|https://*|socks5://*)
+        if echo "$purl" | grep -Eq '^[a-zA-Z0-9._~:/?#@!*+=-]+$' && ! echo "$purl" | grep -Eq '[;&|`$<>\"'\''\\]'; then
+          : # ok
+        else
+          purl=""
+        fi
+        ;;
+      *)
+        purl=""
+        ;;
+    esac
+  fi
+  if [ -n "$purl" ]; then
+    https_proxy="$purl" http_proxy="$purl" CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" "$@"
+  else
+    https_proxy="" http_proxy="" CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" "$@"
+  fi
 }
 
 account_ok() {
-  env $(account_proxy_env "$1") CLOUDSDK_ACTIVE_CONFIG_NAME="$1" \
-    gcloud auth print-access-token >/dev/null 2>&1
+  run_with_account "$1" gcloud auth print-access-token >/dev/null 2>&1
 }
 
 rebuild_on() { # $1=config; stdout=vless link; rc: 0 ok, 1 fail (any reason)
   local out rc link
-  out=$(env $(account_proxy_env "$1") CLOUDSDK_ACTIVE_CONFIG_NAME="$1" timeout 240 gcloud cloud-shell ssh \
+  out=$(run_with_account "$1" timeout 240 gcloud cloud-shell ssh \
         --ssh-flag="-o BatchMode=yes" --quiet \
         --command="bash ~/proxy-start.sh >/dev/null 2>&1; head -1 ~/proxy-link.txt 2>/dev/null" 2>&1)
   rc=$?
@@ -134,7 +152,7 @@ failover() {
     if link=$(rebuild_on "$cfg"); then
       if [ -n "$cur_name" ] && [ "$cur_name" != "$cfg" ]; then
         log "Demoting old account $cur_name to standby..."
-        env $(account_proxy_env "$cur_name") CLOUDSDK_ACTIVE_CONFIG_NAME="$cur_name" timeout 60 gcloud cloud-shell ssh \
+        run_with_account "$cur_name" timeout 60 gcloud cloud-shell ssh \
           --ssh-flag="-o BatchMode=yes" --quiet \
           --command="pkill -f 'cloudflared' >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
         python3 -c "import json, os; p='$STATE_DIR/remote-check-$cur_name.json'; os.path.exists(p) and json.dump(dict(json.load(open(p)), cloudflared_running=False), open(p, 'w'))" >/dev/null 2>&1 || true
@@ -165,7 +183,7 @@ tickle() { # keepalive: short ssh session on the current account
   [ -f "$LAST_TICKLE" ] && last=$(cat "$LAST_TICKLE")
   now=$(date -u +%s)
   [ $(( now - last )) -lt "$KEEPALIVE_INTERVAL" ] && return 0
-  if env $(account_proxy_env "$cfg") CLOUDSDK_ACTIVE_CONFIG_NAME="$cfg" timeout 60 gcloud cloud-shell ssh \
+  if run_with_account "$cfg" timeout 60 gcloud cloud-shell ssh \
       --ssh-flag="-o BatchMode=yes" --quiet --command=true >/dev/null 2>&1; then
     date -u +%s > "$LAST_TICKLE"
     log "keepalive tickle ok ($cfg)"

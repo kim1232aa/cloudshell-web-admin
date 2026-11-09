@@ -1,14 +1,34 @@
 """CRUD for the user-maintained proxy pool, persisted at state/proxies.json."""
 import json
 import os
+import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
 import state_paths
 
-_VALID_SCHEMES = ("http://", "https://", "socks5://")
+_VALID_SCHEMES = ("http", "https", "socks5")
+_FORBIDDEN_CHARS = set(";&|`$<>\"'\\ \t\n\r")
+
+def validate_proxy_url(url: str) -> None:
+    if not url or any(c in _FORBIDDEN_CHARS for c in url):
+        raise ValueError("url contains invalid or forbidden characters")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except Exception as e:
+        raise ValueError(f"malformed url: {e}")
+    if parsed.scheme not in _VALID_SCHEMES:
+        raise ValueError("url must start with http://, https:// or socks5://")
+    if not parsed.hostname:
+        raise ValueError("url missing host")
+    if not re.match(r"^[a-zA-Z0-9.\-_]+$", parsed.hostname):
+        raise ValueError("url hostname contains invalid characters")
+    if parsed.port is not None:
+        if not (1 <= parsed.port <= 65535):
+            raise ValueError("url port out of range")
 
 
 def list_proxies() -> list[dict]:
@@ -28,10 +48,12 @@ def _save(proxies: list[dict]) -> None:
 
 
 def add_proxy(label: str, url: str) -> dict:
-    if not label.strip():
+    label = label.strip()
+    if not label:
         raise ValueError("label must not be empty")
-    if not url.startswith(_VALID_SCHEMES):
-        raise ValueError("url must start with http://, https:// or socks5://")
+    if any(c in "\n\r" for c in label) or len(label) > 100:
+        raise ValueError("label invalid")
+    validate_proxy_url(url)
     proxies = list_proxies()
     entry = {"id": uuid.uuid4().hex[:8], "label": label, "url": url}
     proxies.append(entry)

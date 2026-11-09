@@ -40,6 +40,20 @@ class TestProxyPool(unittest.TestCase):
         with self.assertRaises(ValueError):
             proxy_pool.add_proxy("bad", "ftp://1.2.3.4:21")
 
+    def test_rejects_shell_injection(self):
+        with self.assertRaises(ValueError):
+            proxy_pool.add_proxy("inj1", "http://1.2.3.4:8080; rm -rf /")
+        with self.assertRaises(ValueError):
+            proxy_pool.add_proxy("inj2", "http://1.2.3.4:8080 && echo bad")
+        with self.assertRaises(ValueError):
+            proxy_pool.add_proxy("inj3", "http://1.2.3.4:8080$(id)")
+        with self.assertRaises(ValueError):
+            proxy_pool.add_proxy("inj4", "http://1.2.3.4:8080`whoami`")
+        with self.assertRaises(ValueError):
+            proxy_pool.add_proxy("inj5", "http://1.2.3.4:8080|bash")
+        with self.assertRaises(ValueError):
+            proxy_pool.add_proxy("inj6", "http://1.2.3.4:8080\nnewline")
+
     def test_accepts_http_https_socks5(self):
         proxy_pool.add_proxy("a", "http://1.2.3.4:8080")
         proxy_pool.add_proxy("b", "https://1.2.3.4:8443")
